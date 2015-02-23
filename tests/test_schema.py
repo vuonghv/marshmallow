@@ -1125,6 +1125,38 @@ class TestSchemaValidator:
         errors = s.validate({'foo': 42})
         assert errors['foo'] == [{'code': 'invalid_foo'}]
 
+    # https://github.com/marshmallow-code/marshmallow/issues/144
+    def test_nested_schema_validators(self):
+
+        class ThirdLevel(Schema):
+            name = fields.String()
+
+        class SecondLevel(Schema):
+            third = fields.Nested(ThirdLevel)
+
+        @SecondLevel.validator
+        def validate_third(schema, in_data):
+            raise ValidationError('from second level', 'third')
+
+        class FirstLevel(Schema):
+            second = fields.Nested(SecondLevel)
+
+        @FirstLevel.validator
+        def validate_second(schema, in_data):
+            raise ValidationError('from first level', 'second')
+
+        schema = FirstLevel()
+
+        bad_data = {'second': {'third': None}}
+        _, errors = schema.load(bad_data)
+        expected = {
+            'second': {
+                'third': ['from second level'],
+                '_schema': ['from first level'],
+            }
+        }
+        assert errors == expected
+
 
 class TestPreprocessors:
 
@@ -1846,6 +1878,16 @@ class TestSkipMissingOption:
         assert 'email' not in result.data
         assert 'age' not in result.data
 
+    def test_missing_values_are_skipped_with_many(self):
+        users = [User(name='Joe', email=None, age=None),
+                 User(name='Jane', email=None, age=None)]
+        schema = UserSkipSchema(many=True)
+        results = schema.dump(users)
+        for data in results.data:
+            assert 'name' in data
+            assert 'email' not in data
+            assert 'age' not in data
+
     # Regression test for https://github.com/marshmallow-code/marshmallow/issues/71
     def test_missing_string_values_can_be_skipped(self):
         user = dict(email='foo@bar.com', age=42)
@@ -1862,7 +1904,7 @@ class TestSkipMissingOption:
         assert 'nicknames' in result.data
 
 def get_from_dict(schema, key, obj, default=None):
-    return obj.get(key, default)
+    return obj.get('_' + key, default)
 
 class TestAccessor:
 
@@ -1871,16 +1913,36 @@ class TestAccessor:
             __accessor__ = get_from_dict
             name = fields.Str()
             email = fields.Email()
-        user_dict = {'name': 'joe', 'email': 'joe@shmoe.com'}
+        user_dict = {'_name': 'joe', '_email': 'joe@shmoe.com'}
         schema = UserDictSchema()
         result = schema.dump(user_dict)
-        assert result.data['name'] == user_dict['name']
-        assert result.data['email'] == user_dict['email']
+        assert result.data['name'] == user_dict['_name']
+        assert result.data['email'] == user_dict['_email']
         assert not result.errors
         # can't serialize User object
         user = User(name='joe', email='joe@shmoe.com')
         with pytest.raises(AttributeError):
             schema.dump(user)
+
+    def test_accessor_with_many(self):
+        class UserDictSchema(Schema):
+            __accessor__ = get_from_dict
+            name = fields.Str()
+            email = fields.Email()
+
+        user_dicts = [{'_name': 'joe', '_email': 'joe@shmoe.com'},
+                      {'_name': 'jane', '_email': 'jane@shmane.com'}]
+        schema = UserDictSchema(many=True)
+        results = schema.dump(user_dicts)
+        for result, user_dict in zip(results.data, user_dicts):
+            assert result['name'] == user_dict['_name']
+            assert result['email'] == user_dict['_email']
+        assert not results.errors
+        # can't serialize User object
+        users = [User(name='joe', email='joe@shmoe.com'),
+                 User(name='jane', email='jane@shmane.com')]
+        with pytest.raises(AttributeError):
+            schema.dump(users)
 
     def test_accessor_decorator(self):
         class UserDictSchema(Schema):
@@ -1889,12 +1951,12 @@ class TestAccessor:
 
         @UserDictSchema.accessor
         def get_from_dict2(schema, key, obj, default=None):
-            return obj.get(key, default)
-        user_dict = {'name': 'joe', 'email': 'joe@shmoe.com'}
+            return obj.get('_' + key, default)
+        user_dict = {'_name': 'joe', '_email': 'joe@shmoe.com'}
         schema = UserDictSchema()
         result = schema.dump(user_dict)
-        assert result.data['name'] == user_dict['name']
-        assert result.data['email'] == user_dict['email']
+        assert result.data['name'] == user_dict['_name']
+        assert result.data['email'] == user_dict['_email']
         assert not result.errors
         # can't serialize User object
         user = User(name='joe', email='joe@shmoe.com')
