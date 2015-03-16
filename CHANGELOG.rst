@@ -1,6 +1,13 @@
 Changelog
 ---------
 
+1.2.3 (2015-03-15)
+++++++++++++++++++
+
+Bug fixes:
+
+- Fix inheritance of ``ordered`` class Meta option (:issue:`162`). Thanks :user:`stephenfin` for reporting.
+
 1.2.2 (2015-02-23)
 ++++++++++++++++++
 
