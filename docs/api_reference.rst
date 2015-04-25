@@ -20,7 +20,6 @@ Schema
 
 .. autofunction:: pprint
 
-
 .. _api_fields:
 
 Fields
@@ -29,6 +28,12 @@ Fields
 .. automodule:: marshmallow.fields
     :members:
     :private-members:
+
+Decorators
+==========
+
+.. automodule:: marshmallow.decorators
+    :members:
 
 Validators
 ==========
@@ -41,6 +46,13 @@ Utility Functions
 
 .. automodule:: marshmallow.utils
     :members:
+
+Marshalling
+===========
+
+.. automodule:: marshmallow.marshalling
+    :members:
+    :private-members:
 
 Class Registry
 ==============

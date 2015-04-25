@@ -1,7 +1,8 @@
 # Config file for automatic testing at travis-ci.org
 
 language: python
-
+# http://blog.travis-ci.com/2014-12-17-faster-builds-with-container-based-infrastructure/
+sudo: false
 python:
   - "3.4"
   - "3.3"
@@ -10,9 +11,7 @@ python:
   - "pypy"
 
 install:
-  - pip install pytz
-  - pip install python-dateutil
-  - pip install flake8
+  - pip install -U -r dev-requirements.txt
   - pip install -U .
 
 before_script:

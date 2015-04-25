@@ -24,6 +24,22 @@ try:
 except ImportError:
     dateutil_available = False
 
+class _Missing(object):
+
+    def __bool__(self):
+        return False
+
+    __nonzero__ = __bool__  # PY2 compat
+
+    def __repr__(self):
+        return '<marshmallow.missing>'
+
+
+# Singleton value that indicates that a field's value is missing from input
+# dict passed to :meth:`Schema.load`. If the field's value is not required,
+# it's ``default`` value is used.
+missing = _Missing()
+
 
 def is_generator(obj):
     """Return True if ``obj`` is a generator
@@ -100,7 +116,7 @@ def to_marshallable_type(obj, field_names=None):
     else:
         attrs = set(dir(obj))
     return dict([(attr, getattr(obj, attr, None)) for attr in attrs
-                if not attr.startswith("__") and not attr.endswith("__")])
+                  if not attr.startswith("__") and not attr.endswith("__")])
 
 
 def pprint(obj, *args, **kwargs):
@@ -280,7 +296,7 @@ def pluck(dictlist, key):
 
 # Various utilities for pulling keyed values from objects
 
-def get_value(key, obj, default=None):
+def get_value(key, obj, default=missing):
     """Helper for pulling a keyed value off various types of objects"""
     if type(key) == int:
         return _get_value_for_key(key, obj, default)
@@ -341,5 +357,16 @@ def callable_or_raise(obj):
 
 
 def get_func_args(func):
-    """Return a tuple of argument names for a function."""
-    return inspect.getargspec(func).args
+    """Given a callable, return a tuple of argument names. Handles
+    `functools.partial` objects and class-based callables.
+    """
+    if isinstance(func, functools.partial):
+        return inspect.getargspec(func.func).args
+    if inspect.isfunction(func) or inspect.ismethod(func):
+        return inspect.getargspec(func).args
+    # Callable class
+    return inspect.getargspec(func.__call__).args
+
+
+def if_none(value, default):
+    return value if value is not None else default

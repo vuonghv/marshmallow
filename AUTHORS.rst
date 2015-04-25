@@ -26,6 +26,11 @@ Contributors (chronological)
 - Andriy Yurchuk `@Ch00k <https://github.com/Ch00k>`_
 - Vesa Uimonen `@vesauimonen <https://github.com/vesauimonen>`_
 - David Lord `@davidism <https://github.com/davidism>`_
+- Daniel Castro `@0xDCA <https://github.com/0xDCA>`_
 - Ben Jones `@RealSalmon <https://github.com/RealSalmon>`_
+- Patrick Woods `@hakjoon <https://github.com/hakjoon>`_
 - Lukas Heiniger `@3rdcycle <https://github.com/3rdcycle>`_
+- Ryan Lowe `@ryanlowe0 <https://github.com/ryanlowe0>`_
 - Jimmy Jia `@taion <https://github.com/taion>`_
+- `@lustdante <https://github.com/lustdante>`_
+- Sergey Aganezov, Jr. `@sergey-aganezov-jr <https://github.com/sergey-aganezov-jr>`_

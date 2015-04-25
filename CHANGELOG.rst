@@ -1,6 +1,45 @@
 Changelog
 ---------
 
+2.0.0a1 (2015-04-25)
+++++++++++++++++++++
+
+Features:
+
+- *Backwards-incompatible*: When ``many=True``, the errors dictionary returned by ``dump`` and ``load`` will be keyed on the indices of invalid items in the (de)serialized collection (:issue:`75`). Add ``index_errors=False`` on a Schema's ``class Meta`` options to disable this behavior.
+- *Backwards-incompatible*: By default, fields will raise a ValidationError if the input is ``None``. The ``allow_none`` parameter can override this behavior.
+- *Backwards-incompatible*: A ``Field's`` ``default`` parameter is only used if explicitly set and the field's value is missing in the input to `Schema.dump`. If not set, the key will not be present in the serialized output for missing values . This is the behavior for *all* fields. ``fields.Str`` no longer defaults to ``''``, ``fields.Int`` no longer defaults to ``0``, etc. (:issue:`199`). Thanks :user:`jmcarp` for the feedback.
+- In ``strict`` mode, a ``ValidationError`` is raised. Error messages are accessed via the ``ValidationError's`` ``messages`` attribute (:issue:`128`).
+- Add ``allow_none`` parameter to ``fields.Field``. If ``False`` (the default), validation fails when the field's value is ``None`` (:issue:`76`, :issue:`111`). If ``allow_none`` is ``True``, ``None`` is considered valid and will deserialize to ``None``.
+- Schema-level validators can store error messages for multiple fields (:issue:`118`). Thanks :user:`ksesong` for the suggestion.
+- Add ``pre_load``, ``post_load``, ``pre_dump``, and ``post_dump`` Schema method decorators for defining pre- and post- processing routines (:issue:`153`, :issue:`179`). Thanks :user:`davidism`, :user:`taion`, and :user:`jmcarp` for the suggestions and feedback. Thanks :user:`taion` for the implementation.
+- Error message for ``required`` validation is configurable. (:issue:`78`). Thanks :user:`svenstaro` for the suggestion. Thanks :user:`0xDCA` for the implementation.
+- Add ``load_from`` parameter to fields (:issue:`125`). Thanks :user:`hakjoon`.
+- Add ``load_only`` and ``dump_only`` parameters to fields (:issue:`61`, :issue:`87`). Thanks :user:`philtay`.
+- Add `missing` parameter to fields (:issue:`115`). Thanks :user:`philtay`.
+- Schema validators can take an optional ``raw_data`` argument which contains raw input data, incl. data not specified in the schema (:issue:`127`). Thanks :user:`ryanlowe0`.
+- Add ``validate.OneOf`` (:issue:`135`) and ``validate.ContainsOnly`` (:issue:`149`) validators. Thanks :user:`philtay`.
+- Error messages for validators can be interpolated with `{input}` and other values (depending on the validator).
+- ``fields.TimeDelta`` always serializes to an integer value in order to avoid rounding errors (:issue:`105`). Thanks :user:`philtay`.
+- Add ``include`` class Meta option to support field names which are Python keywords (:issue:`139`). Thanks :user:`nickretallack` for the suggestion.
+- ``exclude`` parameter is respected when used together with ``only`` parameter (:issue:`165`). Thanks :user:`lustdante` for the catch and patch.
+- ``fields.List`` works as expected with generators and sets (:issue:`185`). Thanks :user:`sergey-aganezov-jr`.
+
+Deprecation/Removals:
+
+- ``MarshallingError`` and ``UnmarshallingError`` error are deprecated in favor of a single ``ValidationError`` (:issue:`160`).
+- ``context`` argument passed to Method fields is deprecated. Use ``self.context`` instead (:issue:`184`).
+- Remove ``ForcedError``.
+- Remove support for generator functions that yield validators (:issue:`74`). Plain generators of validators are still supported.
+- The ``Select/Enum`` field is deprecated in favor of using `validate.OneOf` validator (:issue:`135`).
+- Remove legacy, pre-1.0 API (``Schema.data`` and ``Schema.errors`` properties) (:issue:`73`).
+- Remove ``null`` value.
+
+Other changes:
+
+- ``Marshaller``, ``Unmarshaller`` were moved to ``marshmallow.marshalling``. These should be considered private API (:issue:`129`).
+- Make ``allow_null=True`` the default for ``Nested`` fields. This will make ``None`` serialize to ``None`` rather than a dictionary with empty values (:issue:`132`). Thanks :user:`nickrellack` for the suggestion.
+
 1.2.5 (2015-04-25)
 ++++++++++++++++++
 
@@ -26,7 +65,6 @@ Other changes:
 Support:
 
 - Correction to ``_postprocess`` method in docs. Thanks again :user:`taion`.
-
 
 1.2.3 (2015-03-15)
 ++++++++++++++++++

@@ -2,6 +2,7 @@
 """The :class:`Schema` class, including its metaclass and options (class Meta)."""
 from __future__ import absolute_import, unicode_literals
 
+from collections import defaultdict
 import copy
 import datetime as dt
 import decimal
@@ -12,10 +13,11 @@ import warnings
 from collections import namedtuple
 from functools import partial
 
-from marshmallow import base, fields, utils, class_registry
+from marshmallow import base, fields, utils, class_registry, marshalling
 from marshmallow.compat import (with_metaclass, iteritems, text_type,
                                 binary_type, OrderedDict)
 from marshmallow.orderedset import OrderedSet
+from marshmallow.decorators import PRE_DUMP, POST_DUMP, PRE_LOAD, POST_LOAD
 
 
 #: Return type of :meth:`Schema.dump` including serialized data and errors
@@ -87,18 +89,66 @@ class SchemaMeta(type):
                 if hasattr(base, 'Meta') and getattr(base.Meta, 'ordered', False)),
                 False
             )
-        fields = _get_fields(attrs, base.FieldABC, pop=True, ordered=ordered)
+        include = list(getattr(meta, 'include', {}).items())
+        fields = _get_fields(attrs, base.FieldABC, pop=True, ordered=ordered) + include
         klass = super(SchemaMeta, mcs).__new__(mcs, name, bases, attrs)
         fields = _get_fields_by_mro(klass, base.FieldABC) + fields
         dict_cls = OrderedDict if ordered else dict
         klass._declared_fields = dict_cls(fields)
         class_registry.register(name, klass)
-        # Need to copy validators, data handlers, and preprocessors lists
-        # so they are not shared among subclasses and ancestors
+
+        mcs._copy_func_attrs(klass)
+        mcs._resolve_processors(klass)
+
+        return klass
+
+    @classmethod
+    def _copy_func_attrs(mcs, klass):
+        """Copy non-shareable class function lists
+
+        Need to copy validators, data handlers, and preprocessors lists so they
+        are not shared among subclasses and ancestors.
+        """
         for attr in mcs.FUNC_LISTS:
             attr_copy = copy.copy(getattr(klass, attr))
             setattr(klass, attr, attr_copy)
-        return klass
+
+    @staticmethod
+    def _resolve_processors(klass):
+        """Add in the decorated processors
+
+        By doing this after constructing the class, we let standard inheritance
+        do all the hard work.
+        """
+        mro = klass.mro()
+
+        klass.__processors__ = defaultdict(list)
+        for attr_name in dir(klass):
+            # Need to look up the actual descriptor, not whatever might be
+            # bound to the class. This needs to come from the __dict__ of the
+            # declaring class.
+            for parent in mro:
+                try:
+                    attr = parent.__dict__[attr_name]
+                except KeyError:
+                    continue
+                else:
+                    break
+            else:
+                # In case we didn't find the attribute and didn't break above.
+                # We should never hit this - it's just here for completeness
+                # to exclude the possibility of attr being undefined.
+                continue
+
+            try:
+                processor_tags = attr.__marshmallow_tags__
+            except AttributeError:
+                continue
+
+            for tag in processor_tags:
+                # Use name here so we can get the bound method later, in case
+                # the processor was a descriptor or something.
+                klass.__processors__[tag].append(attr_name)
 
 
 class SchemaOpts(object):
@@ -122,6 +172,8 @@ class SchemaOpts(object):
         self.json_module = getattr(meta, 'json_module', json)
         self.skip_missing = getattr(meta, 'skip_missing', False)
         self.ordered = getattr(meta, 'ordered', False)
+        self.index_errors = getattr(meta, 'index_errors', True)
+        self.include = getattr(meta, 'include', {})
 
 
 class BaseSchema(base.SchemaABC):
@@ -153,9 +205,6 @@ class BaseSchema(base.SchemaABC):
         data, errors = schema.dump(album)
         data  # {'release_date': '1968-12-06', 'title': 'Beggars Banquet'}
 
-    :param obj: The object or collection of objects to be serialized. NOTE: This
-        parameter is deprecated. Pass the object to the :meth:`dump` method
-        instead.
     :param dict extra: A dict of extra attributes to bind to the serialized result.
     :param tuple only: A list or tuple of fields to serialize. If `None`, all
         fields will be serialized.
@@ -221,6 +270,10 @@ class BaseSchema(base.SchemaABC):
         - ``additional``: Tuple or list of fields to include *in addition* to the
             explicitly declared fields. ``additional`` and ``fields`` are
             mutually-exclusive options.
+        - ``include``: Dictionary of additional fields to include in the schema. It is
+            usually better to define fields as class variables, but you may need to
+            use this option, e.g., if your fields are Python keywords. May be an
+            `OrderedDict`.
         - ``exclude``: Tuple or list of fields to exclude in the serialized result.
         - ``dateformat``: Date format for all DateTime fields that do not have their
             date format explicitly specified.
@@ -233,19 +286,19 @@ class BaseSchema(base.SchemaABC):
         - ``ordered``: If `True`, order serialization output according to the
             order in which fields were declared. Output of `Schema.dump` will be a
             `collections.OrderedDict`.
+        - ``index_errors``: If `True`, errors dictionaries will include the index
+            of invalid items in a collection.
         """
         pass
 
-    def __init__(self, obj=None, extra=None, only=None,
-                exclude=None, prefix='', strict=False, many=False, skip_missing=False,
-                context=None):
+    def __init__(self, extra=None, only=(), exclude=(), prefix='', strict=False,
+                 many=False, skip_missing=False, context=None):
         # copy declared fields from metaclass
         self.declared_fields = copy.deepcopy(self._declared_fields)
-        self._data = None  # the cached, serialized data
         self.many = many
         self.opts = self.OPTIONS_CLASS(self.Meta)
-        self.only = only or ()
-        self.exclude = exclude or ()
+        self.only = only
+        self.exclude = exclude
         self.prefix = prefix
         self.strict = strict or self.opts.strict
         self.skip_missing = skip_missing or self.opts.skip_missing
@@ -253,27 +306,14 @@ class BaseSchema(base.SchemaABC):
         #: Dictionary mapping field_names -> :class:`Field` objects
         self.fields = self.dict_class()
         #: Callable marshalling object
-        self._marshal = fields.Marshaller(
+        self._marshal = marshalling.Marshaller(
             prefix=self.prefix
         )
         #: Callable unmarshalling object
-        self._unmarshal = fields.Unmarshaller()
+        self._unmarshal = marshalling.Unmarshaller()
         self.extra = extra
         self.context = context or {}
         self._update_fields(many=many)
-
-        # For backwards compatibility, allow object to be passed in.
-        self.obj = obj
-        self._data = None
-        # If object is passed in, marshal it immediately so that errors are stored
-        if self.obj is not None:
-            warnings.warn('Serializing objects in the Schema constructor is a '
-                          'deprecated API. Use the Schema.dump method instead.',
-                          category=DeprecationWarning)
-            self._update_fields(self.obj, many=many)
-            self._update_data()
-        else:
-            self._update_fields(many=many)
 
     def __repr__(self):
         return '<{ClassName}(many={self.many}, strict={self.strict})>'.format(
@@ -329,7 +369,6 @@ class BaseSchema(base.SchemaABC):
             UserSchema().load({'email': 'bademail'})  # raises ValueError
 
         .. versionadded:: 0.7.0
-
         """
         cls.__error_handler__ = func
         return func
@@ -356,8 +395,13 @@ class BaseSchema(base.SchemaABC):
             You can register multiple handler functions for the same schema.
 
         .. versionadded:: 0.7.0
-
+        .. deprecated:: 2.0.0
+            Use `marshmallow.post_dump` instead.
         """
+        warnings.warn(
+            'Schema.data_handler is deprecated. Use the marshmallow.post_dump decorator '
+            'instead.', category=DeprecationWarning
+        )
         cls.__data_handlers__ = cls.__data_handlers__ or []
         cls.__data_handlers__.append(func)
         return func
@@ -378,12 +422,23 @@ class BaseSchema(base.SchemaABC):
             def validate_numbers(schema, input_data):
                 return input_data['field_b'] > input_data['field_a']
 
+        A validator may take an optional third argument which will contain the raw input
+        data. ::
+
+            @NumberSchema.validator
+            def check_unknown_fields(schema, input_data, raw_data):
+                for k in raw_data:
+                    if k not in schema.fields:
+                        raise ValidationError('Unknown field name')
+
         .. note::
 
             You can register multiple validators for the same schema.
 
         .. versionadded:: 1.0
-
+        .. versionchanged:: 2.0
+            Validators can receive an optional third argument which is the
+            raw input data.
         """
         cls.__validators__ = cls.__validators__ or []
         cls.__validators__.append(func)
@@ -411,8 +466,13 @@ class BaseSchema(base.SchemaABC):
             You can register multiple preprocessors for the same schema.
 
         .. versionadded:: 1.0
-
+        .. deprecated:: 2.0.0
+            Use `marshmallow.pre_load` instead.
         """
+        warnings.warn(
+            'Schema.preprocessor is deprecated. Use the marshmallow.pre_load decorator '
+            'instead.', category=DeprecationWarning
+        )
         cls.__preprocessors__ = cls.__preprocessors__ or []
         cls.__preprocessors__.append(func)
         return func
@@ -453,6 +513,9 @@ class BaseSchema(base.SchemaABC):
             obj = list(obj)
         if update_fields:
             self._update_fields(obj, many=many)
+
+        obj = self._invoke_dump_processors(PRE_DUMP, obj, many)
+
         preresult = self._marshal(
             obj,
             self.fields,
@@ -461,10 +524,14 @@ class BaseSchema(base.SchemaABC):
             skip_missing=self.skip_missing,
             accessor=self.__accessor__,
             dict_class=self.dict_class,
+            index_errors=self.opts.index_errors,
             **kwargs
         )
         result = self._postprocess(preresult, many, obj=obj)
         errors = self._marshal.errors
+
+        result = self._invoke_dump_processors(POST_DUMP, result, many)
+
         return MarshalResult(result, errors)
 
     def dumps(self, obj, many=None, update_fields=True, *args, **kwargs):
@@ -539,36 +606,6 @@ class BaseSchema(base.SchemaABC):
         """
         return data
 
-    ##### Legacy API #####
-
-    @property
-    def data(self):
-        """The serialized data as an dictionary.
-
-        .. deprecated:: 1.0.0
-            Use the return value of `dump` instead.
-        """
-        warnings.warn('Accessing data through Schema.data is deprecated. '
-                      'Use the return value of Schema.dump instead.',
-                      category=DeprecationWarning)
-        if not self._data:
-            self._update_data()
-        return self._data
-
-    @property
-    def errors(self):
-        """Dictionary of errors raised during serialization.
-
-        .. deprecated:: 1.0.0
-            Use the return value of `load` instead.
-        """
-        return self._marshal.errors
-
-    def _update_data(self):
-        if not self._data:
-            self._data = self.dump(self.obj).data
-        return self._data
-
     ##### Private Helpers #####
 
     def _do_load(self, data, many=None, postprocess=True):
@@ -582,6 +619,9 @@ class BaseSchema(base.SchemaABC):
         :return: A tuple of the form (`data`, `errors`)
         """
         many = self.many if many is None else bool(many)
+
+        data = self._invoke_load_processors(PRE_LOAD, data, many)
+
         # Bind self as the first argument of validators and preprocessors
         if self.__validators__:
             validators = [partial(func, self)
@@ -603,24 +643,24 @@ class BaseSchema(base.SchemaABC):
             validators=validators,
             preprocess=preprocessors,
             postprocess=postprocess_funcs,
-            dict_class=self.dict_class
+            dict_class=self.dict_class,
+            index_errors=self.opts.index_errors,
         )
         errors = self._unmarshal.errors
         if errors and callable(self.__error_handler__):
             self.__error_handler__(errors, data)
+
+        result = self._invoke_load_processors(POST_LOAD, result, many)
+
         return result, errors
 
     def _update_fields(self, obj=None, many=False):
         """Update fields based on the passed in object."""
-        # if only __init__ param is specified, only return those fields
         if self.only:
-            ret = self.__filter_fields(self.only, obj, many=many)
-            self.__set_field_attrs(ret)
-            self.fields = ret
-            return self.fields
-
-        if self.opts.fields:
             # Return only fields specified in fields option
+            field_names = self.set_class(self.only)
+        elif self.opts.fields:
+            # Return fields specified in fields option
             field_names = self.set_class(self.opts.fields)
         elif self.opts.additional:
             # Return declared fields + additional fields
@@ -691,9 +731,37 @@ class BaseSchema(base.SchemaABC):
                 ret[key] = field_obj
         return ret
 
+    def _invoke_dump_processors(self, tag_name, data, many):
+        # The raw post-dump processors may do things like add an envelope, so
+        # invoke those after invoking the non-raw processors which will expect
+        # to get a list of items.
+        data = self._invoke_processors(tag_name, raw=False, data=data, many=many)
+        data = self._invoke_processors(tag_name, raw=True, data=data, many=many)
+        return data
+
+    def _invoke_load_processors(self, tag_name, data, many):
+        # This has to invert the order of the dump processors, so run the raw
+        # processors first.
+        data = self._invoke_processors(tag_name, raw=True, data=data, many=many)
+        data = self._invoke_processors(tag_name, raw=False, data=data, many=many)
+        return data
+
+    def _invoke_processors(self, tag_name, raw, data, many):
+        for attr_name in self.__processors__[(tag_name, raw)]:
+            # This will be a bound method.
+            processor = getattr(self, attr_name)
+
+            # It's probably not worth the extra LoC to hoist this branch out of
+            # the loop.
+            if raw:
+                data = utils.if_none(processor(data, many), data)
+            elif many:
+                data = [utils.if_none(processor(item), item) for item in data]
+            else:
+                data = utils.if_none(processor(data), data)
+
+        return data
+
 
 class Schema(with_metaclass(SchemaMeta, BaseSchema)):
     __doc__ = BaseSchema.__doc__
-
-
-Serializer = Schema

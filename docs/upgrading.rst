@@ -5,6 +5,257 @@
 Upgrading to Newer Releases
 ===========================
 
+This section documents migration paths to new releases.
+
+Upgrading to 2.0
+++++++++++++++++
+
+Deserializing `None`
+********************
+
+In 2.0, validation/deserialization of `None` is consistent across field types. If ``allow_none`` is `False` (the default), validation fails when the field's value is `None`. If ``allow_none`` is `True`, `None` is considered valid, and the field deserializes to `None`.
+
+
+.. code-block:: python
+
+    from marshmallow import fields
+
+    # In 1.0, deserialization of None was inconsistent
+    fields.Int().deserialize(None)  # 0
+    fields.Str().deserialize(None)  # ''
+    fields.DateTime().deserialize(None)  # error: Could not deserialize None to a datetime.
+
+
+    # In 2.0, validation/deserialization of None is consistent
+    fields.Int().deserialize(None)  # error: Field may not be null.
+    fields.Str().deserialize(None)  # error: Field may not be null.
+    fields.DateTime().deserialize(None)  # error: Field may not be null.
+
+    # allow_none makes None a valid value
+    fields.Int(allow_none=True).deserialize(None)  # None
+
+Default Values
+**************
+
+Before version 2.0, certain fields (including `fields.String`, `fields.List`, `fields.Nested` and number fields) had implicit default values that would be used if their corresponding input value was `None` or missing.
+
+
+In 2.0, these implicit defaults are removed.  A `Field's <marshmallow.fields.Field>` ``default`` parameter is only used if you explicitly set it. Otherwise, missing inputs will be excluded from the serialized output.
+
+.. code-block:: python
+
+    from marshmallow import Schema, fields
+
+    class MySchema(Schema):
+        str_no_default = fields.Str()
+        int_no_default = fields.Int()
+        list_no_default = fields.List(fields.Str)
+
+    schema = MySchema()
+
+    # In 1.0, None was treated as a missing input, so implicit default values were used
+    schema.dump({'str_no_default': None,
+                'int_no_default': None,
+                'list_no_default': None}).data
+    # {'str_no_default': '', 'int_no_default': 0, 'list_no_default': []}
+
+    # In 2.0, None serializes to None. No more implicit defaults.
+    schema.dump({'str_no_default': None,
+                'int_no_default': None,
+                'list_no_default': None}).data
+    # {'str_no_default': None, 'int_no_default': None, 'list_no_default': None}
+
+
+.. code-block:: python
+
+    # In 1.0, implicit default values were used for missing inputs
+    schema.dump({}).data
+    # {'int_no_default': 0, 'str_no_default': '', 'list_no_default': []}
+
+    # In 2.0, missing inputs are excluded from the serialized output
+    # if no defaults are specified
+    schema.dump({}).data
+    # {}
+
+
+Pre-processing and Post-processing Methods
+******************************************
+
+The pre- and post-processing API was significantly improved for better consistency and flexibility. The `pre_load <marshmallow.decorators.pre_load>`, `post_load <marshmallow.decorators.post_load>`, `pre_dump <marshmallow.decorators.pre_dump>`, and `post_dump <marshmallow.decorators.post_dump>` should be used to define processing hooks. `Schema.preprocessor` and `Schema.data_handler` are deprecated.
+
+
+.. code-block:: python
+
+    # 1.0 Deprecated API
+    from marshmallow import Schema, fields
+
+    class ExampleSchema(Schema):
+        field_a = fields.Int()
+
+    @ExampleSchema.preprocessor
+    def increment(schema, data):
+        data['field_a'] += 1
+        return data
+
+    @ExampleSchema.data_handler
+    def decrement(schema, data, obj):
+        data['field_a'] -= 1
+        return data
+
+
+    # 2.0 API
+    from marshmallow import Schema, fields, pre_load, post_dump
+
+    class ExampleSchema(Schema):
+        field_a = fields.Int()
+
+        @pre_load
+        def increment(self, data):
+            data['field_a'] += 1
+            return data
+
+        @post_dump
+        def decrement(self, data):
+            data['field_a'] -= 1
+            return data
+
+See the :ref:`Extending Schemas <extending>` page for more information on the ``pre_*`` and ``post_*`` decorators.
+
+
+Error Format when ``many=True``
+*******************************
+
+When validating a collection (i.e. when calling ``load`` or ``dump`` with ``many=True``), the errors dictionary will be keyed on the indices of invalid items.
+
+.. code-block:: python
+
+    from marshmallow import Schema, fields
+
+    class BandMemberSchema(Schema):
+        name = fields.String(required=True)
+        email = fields.Email()
+
+    user_data = [
+        {'email': 'mick@stones.com', 'name': 'Mick'},
+        {'email': 'invalid', 'name': 'Invalid'},  # invalid email
+        {'email': 'keith@stones.com', 'name': 'Keith'},
+        {'email': 'charlie@stones.com'},  # missing "name"
+    ]
+
+    result = BandMemberSchema(many=True).load(user_data)
+
+    # 1.0
+    result.errors
+    # {'email': ['"invalid" is not a valid email address.'],
+    #  'name': ['Missing data for required field.']}
+
+    # 2.0
+    result.errors
+    # {1: {'email': ['"invalid" is not a valid email address.']},
+    #  3: {'name': ['Missing data for required field.']}}
+
+You can still get the pre-2.0 behavior by setting ``index_errors = False`` in a ``Schema's`` *class Meta* options.
+
+Use ``ValidationError`` instead of ``MarshallingError`` and ``UnmarshallingError``
+**********************************************************************************
+
+The :exc:`MarshallingError` and :exc:`UnmarshallingError` exceptions are deprecated in favor of a single :exc:`ValidationError <marshmallow.exceptions.ValidationError>`. Users who have written custom fields or are using ``strict`` mode will need to change their code accordingly.
+
+Custom Fields
+-------------
+
+Custom fields should raise :exc:`ValidationError <marshmallow.exceptions.ValidationError>` in their `_deserialize` and `_serialize` methods when a validation error occurs.
+
+.. code-block:: python
+    :emphasize-lines: 17
+
+    from marshmallow import fields, ValidationError
+    from marshmallow.exceptions import UnmarshallingError
+
+    # In 1.0, an UnmarshallingError was raised
+    class PasswordField(fields.Field):
+
+        def _deserialize(self, val):
+            if not len(val) >= 6:
+                raise UnmarshallingError('Password too short.')
+            return val
+
+    # In 2.0, an ValidationError is raised
+    class PasswordField(fields.Field):
+
+        def _deserialize(self, val):
+            if not len(val) >= 6:
+                raise ValidationError('Password too short.')
+            return val
+
+Handle ``ValidationError`` in strict mode
+-----------------------------------------
+
+When using `strict` mode, you should handle `ValidationErrors` when calling `Schema.dump` and `Schema.load`.
+
+.. code-block:: python
+    :emphasize-lines: 3,14
+
+    from marshmallow import exceptions as exc
+
+    schema = BandMemberSchema(strict=True)
+
+    # 1.0
+    try:
+        schema.load({'email': 'invalid-email'})
+    except exc.UnmarshallingError as err:
+        # ...
+
+    # 2.0
+    try:
+        schema.load({'email': 'invalid-email'})
+    except exc.ValidationError as err:
+        # ...
+
+
+Accessing error messages in strict mode
+***************************************
+
+In 2.0, `strict` mode was improved so that you can access all error messages for a schema (rather than failing early) by accessing a `ValidationError's` ``messages`` attribute.
+
+.. code-block:: python
+    :emphasize-lines: 6
+
+    schema = BandMemberSchema(strict=True)
+
+    try:
+        result = schema.load({'email': 'invalid'})
+    except ValidationMessage as err:
+        print(err.messages)
+    # {
+    #     'email': ['"invalid" is not a valid email address.'],
+    #     'name': ['Missing data for required field.']
+    # }
+
+
+
+Use ``OneOf`` instead of ``fields.Select``
+******************************************
+
+The `fields.Select` field is deprecated in favor of the newly-added `OneOf` validator.
+
+.. code-block:: python
+
+    from marshmallow import fields
+    from marshmallow.validate import OneOf
+
+    # 1.0
+    fields.Select(['red', 'blue'])
+
+    # 2.0
+    fields.Str(validate=OneOf(['red', 'blue']))
+
+More
+****
+
+For a full list of changes in 2.0, see the :ref:`Changelog <changelog>`.
+
+
 Upgrading to 1.2
 ++++++++++++++++
 

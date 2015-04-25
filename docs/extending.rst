@@ -4,6 +4,147 @@
 Extending Schemas
 =================
 
+Pre-processing and Post-processing Methods
+------------------------------------------
+
+Data pre-processing and post-processing methods can be registered using the `pre_load <marshmallow.decorators.pre_load>`, `post_load <marshmallow.decorators.post_load>`, `pre_dump <marshmallow.decorators.pre_dump>`, and `post_dump <marshmallow.decorators.post_dump>` decorators.
+
+
+.. code-block:: python
+    :emphasize-lines: 7
+
+    from marshmallow import Schema, fields, pre_load
+
+    class UserSchema(Schema):
+        name = fields.Str()
+        slug = fields.Str()
+
+        @pre_load
+        def slugify_name(self, in_data):
+            in_data['slug'] = in_data['slug'].lower().strip().replace(' ', '-')
+            return in_data
+
+    schema = UserSchema()
+    result, errors = schema.load({'name': 'Steve', 'slug': 'Steve Loria '})
+    result['slug']  # => 'steve-loria'
+
+
+Passing Raw Data
+++++++++++++++++
+
+By default, pre- and post-processing methods receive one object/datum at a time, transparently handling the ``many`` parameter passed to the schema at runtime.
+
+In cases where your pre- and post-processing methods need to receive the raw data passed to the `Schema`, pass ``raw=True`` to the method decorators. The method will receive the raw input data (which may be a single datum or a collection) and the boolean value of ``many``.
+
+
+Example: Enveloping
++++++++++++++++++++
+
+One common use case is to wrap data in a namespace upon serialization and unwrap the data during deserialization.
+
+.. code-block:: python
+    :emphasize-lines: 12,13,17,18
+
+    from marshmallow import Schema, fields, pre_load, post_load, post_dump
+
+    class UserSchema(Schema):
+        name = fields.Str()
+        email = fields.Email()
+
+        @staticmethod
+        def get_envelope_key(many):
+            """Helper to get the envelope key."""
+            return 'users' if many else 'user'
+
+        @pre_load(raw=True)
+        def unwrap_envelope(self, data, many):
+            key = self.get_envelope_key(many)
+            return data[key]
+
+        @post_dump(raw=True)
+        def wrap_with_envelope(self, data, many):
+            key = self.get_envelope_key(many)
+            return {key: data}
+
+        @post_load
+        def make_user(self, data):
+            return User(**data)
+
+    user_schema = UserSchema()
+
+    user = User('Mick', email='mick@stones.org')
+    user_data = user_schema.dump(user).data
+    # {'user': {'email': 'mick@stones.org', 'name': 'Mick'}}
+
+    users = [User('Keith', email='keith@stones.org'),
+            User('Charlie', email='charlie@stones.org')]
+    users_data = user_schema.dump(users, many=True).data
+    # {'users': [{'email': 'keith@stones.org', 'name': 'Keith'},
+    #            {'email': 'charlie@stones.org', 'name': 'Charlie'}]}
+
+    user_objs = user_schema.load(users_data, many=True).data
+    # [<User(name='Keith Richards')>, <User(name='Charlie Watts')>]
+
+Pre-/Post-processor Invocation Order
+++++++++++++++++++++++++++++++++++++
+
+In summary, the processing pipeline for deserialization is as follows:
+
+1. ``@pre_load(raw=True)`` methods
+2. ``@pre_load(raw=False)`` methods
+3. ``load(in_data, many)`` (validation and deserialization)
+4. ``@post_load(raw=True)`` methods
+5. ``@post_load(raw=False)`` methods
+
+The pipeline for serialization is similar, except that the "raw" processors are invoked *after* the "non-raw" processors.
+
+1. ``@pre_dump(raw=False)`` methods
+2. ``@pre_dump(raw=True)`` methods
+3. ``dump(obj, many)`` (serialization)
+4. ``@post_dump(raw=False)`` methods
+5. ``@post_dump(raw=True)`` methods
+
+
+.. warning::
+
+    You may register multiple processor methods on a Schema. Keep in mind, however, that **the invocation order of decorated methods of the same type is not guaranteed**. If you need to guarantee order of processing steps, you should put them in the same method.
+
+
+    .. code-block:: python
+
+        from marshmallow import Schema, fields, pre_load
+
+        # YES
+        class MySchema(Schema):
+            field_a = fields.Field()
+
+            @pre_load
+            def preprocess(self, data):
+                step1_data = self.step1(data)
+                step2_data = self.step2(data)
+                return step2_data
+
+            def step1(self, data):
+                # ...
+
+            # Depends on step1
+            def step2(self, data):
+                # ...
+
+        # NO
+        class MySchema(Schema):
+            field_a = fields.Field()
+
+            @pre_load
+            def step1(self, data):
+                # ...
+
+            # Depends on step1
+            @pre_load
+            def step2(self, data):
+                # ...
+
+
 Handling Errors
 ---------------
 
@@ -61,10 +202,28 @@ as arguments. Schema-level validation errors will be stored on the ``_schema`` k
     errors['_schema'] # => ["field_a must be greater than field_b"]
 
 
+Validating Raw Input Data
++++++++++++++++++++++++++
+
+Normally, unspecified field names are ignored by the validator. If you would like access to the raw input (e.g. to fail validation if an unknown field name is sent), an optional third argument will contain the raw input data.
+
+.. code-block:: python
+
+    @NumberSchema.validator
+    def check_unknown_fields(schema, input_data, raw_data):
+        for k in raw_data:
+            if k not in schema.fields:
+                raise ValidationError('Unknown field name')
+
+    schema = NumberSchema()
+    result, errors = schema.load({'field_c': 0})
+    errors['_schema'] # => ["Unknown field name"]
+
+
 Storing Errors on Specific Fields
 +++++++++++++++++++++++++++++++++
 
-If you want to store schema-level validation errors on a specific field, you can pass a field name to the :exc:`ValidationError`.
+If you want to store schema-level validation errors on a specific field, you can pass a field name (or multiple field names) to the :exc:`ValidationError <marshmallow.exceptions.ValidationError>`.
 
 .. code-block:: python
 
@@ -77,66 +236,6 @@ If you want to store schema-level validation errors on a specific field, you can
     schema = NumberSchema()
     result, errors = schema.load({'field_a': 2, 'field_b': 1})
     errors['field_a'] # => ["field_a must be greater than field_b"]
-
-Pre-processing Input Data
--------------------------
-
-Data pre-processing functions can be registered using :meth:`Schema.preprocessor`. A pre-processing function receives the schema instace and the input data as arguments and must return the dictionary of processed data.
-
-
-.. code-block:: python
-
-    from marshmallow import Schema, fields
-
-    class UserSchema(Schema):
-        name = fields.String()
-        slug = fields.String()
-
-    @UserSchema.preprocessor
-    def slugify_name(schema, in_data):
-        in_data['slug'] = in_data['slug'].lower().strip().replace(' ', '-')
-        return in_data
-
-    schema = UserSchema()
-    result, errors = schema.load({'name': 'Steve', 'slug': 'Steve Loria '})
-    result['slug']  # => 'steve-loria'
-
-
-Transforming Data
------------------
-
-The :meth:`Schema.data_handler` decorator can be used to register data post-processing functions for transforming serialized data. The function receives the serializer instance, the serialized data dictionary, and the original object to be serialized. It should return the transformed data.
-
-One use case might be to add a "root" namespace for a serialized object.
-
-.. code-block:: python
-
-    from marshmallow import Schema, fields
-
-    class UserSchema(Schema):
-        NAME = 'user'
-        name = fields.String()
-        email = fields.Email()
-
-    @UserSchema.data_handler
-    def add_root(serializer, data, obj):
-        return {
-            serializer.NAME: data
-        }
-
-    user = User('Monty Python', email='monty@python.org')
-    UserSchema().dump(user).data
-    # {
-    #     'user': {
-    #         'name': 'Monty Python',
-    #         'email': 'monty@python.org'
-    #     }
-    # }
-
-.. note::
-
-    It is possible to register multiple data handlers for a single serializer.
-
 
 Overriding how attributes are accessed
 --------------------------------------
@@ -161,29 +260,27 @@ However, if you want to specify how values are accessed from an object, you can 
 Handler Functions as Class Members
 ----------------------------------
 
-You can register error handlers, validators, and data handlers as optional class members. This might be useful for defining an abstract `Schema` class.
+You can register a Schema's error handler, validators, and accessor as optional class members. This might be useful for defining an abstract `Schema` class.
 
 .. code-block:: python
 
     class BaseSchema(Schema):
         __error_handler__ = handle_errors  # A function
-        __data_handlers__ = [add_root]      # List of functions
         __validators__ = [validate_schema]  # List of functions
-        __preprocessors__ = [preprocess_data]  # List of functions
         __accessor__ = get_from_dict  # A function
 
 
-Extending "class Meta" Options
---------------------------------
+Custom "class Meta" Options
+---------------------------
 
-``class Meta`` options are a way to configure and modify a :class:`Schema's <Schema>` behavior. See the :class:`API docs <Schema>` for a listing of available options.
+``class Meta`` options are a way to configure and modify a :class:`Schema's <Schema>` behavior. See the :class:`API docs <Schema.Meta>` for a listing of available options.
 
 You can add custom ``class Meta`` options by subclassing :class:`SchemaOpts`.
 
-Example: Adding a Namespace to Serialized Output
-++++++++++++++++++++++++++++++++++++++++++++++++
+Example: Enveloping, Revisited
+++++++++++++++++++++++++++++++
 
-Let's build upon the example above for adding a root namespace to serialized output. This time, we will create a custom base serializer with additional ``class Meta`` options.
+Let's build upon the example above for adding an envelope to serialized output. This time, we will allow the envelope key to be customizable with ``class Meta`` options.
 
 ::
 
@@ -209,9 +306,8 @@ First, we'll add our namespace configuration to a custom options class.
 
     class NamespaceOpts(SchemaOpts):
         """Same as the default class Meta options, but adds "name" and
-        "plural_name" options for namespacing.
+        "plural_name" options for enveloping.
         """
-
         def __init__(self, meta):
             SchemaOpts.__init__(self, meta)
             self.name = getattr(meta, 'name', None)
@@ -226,17 +322,15 @@ Then we create a custom :class:`Schema` that uses our options class.
     class NamespacedSchema(Schema):
         OPTIONS_CLASS = NamespaceOpts
 
-        def _postprocess(self, data, many, obj):
-            """Execute any postprocessing steps, including adding a namespace to the final
-            output.
-            """
-            data = Schema._postprocess(self, data, many, obj)
-            if self.opts.name:   # Add namespace
-                namespace = self.opts.name
-                if many:
-                    namespace = self.opts.plural_name
-                data = {namespace: data}
-            return data
+        @pre_load(raw=True)
+        def unwrap_envelope(self, data, many):
+            key = self.opts.plural_name if many else self.opts.name
+            return {key: data}
+
+        @post_dump(raw=True)
+        def wrap_with_envelope(self, data, many):
+            key = self.opts.plural_name if many else self.opts.name
+            return {key: data}
 
 
 Our application schemas can now inherit from our custom schema class.

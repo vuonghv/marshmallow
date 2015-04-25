@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-from __future__ import division
 import sys
+import itertools
 
 PY2 = int(sys.version[0]) == 2
 PY26 = PY2 and int(sys.version_info[1]) < 7
@@ -16,6 +16,7 @@ if PY2:
     iterkeys = lambda d: d.iterkeys()
     itervalues = lambda d: d.itervalues()
     iteritems = lambda d: d.iteritems()
+    zip_longest = itertools.izip_longest
     if PY26:
         from .ordereddict import OrderedDict
     else:
@@ -32,6 +33,7 @@ else:
     iterkeys = lambda d: d.keys()
     itervalues = lambda d: d.values()
     iteritems = lambda d: d.items()
+    zip_longest = itertools.zip_longest
     from collections import OrderedDict
     OrderedDict = OrderedDict
 
@@ -53,11 +55,3 @@ def with_metaclass(meta, *bases):
                 return type.__new__(cls, name, (), d)
             return meta(name, bases, d)
     return metaclass('temporary_class', None, {})
-
-
-def total_seconds(td):
-    """Return the total number of seconds contained in the duration.
-
-    Needed for python 2.6 compatibility.
-    """
-    return (td.microseconds + (td.seconds + td.days * 24 * 3600) * 10**6) / 10**6

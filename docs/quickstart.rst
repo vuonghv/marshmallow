@@ -16,13 +16,10 @@ Let's start with a basic user "model".
     import datetime as dt
 
     class User(object):
-        def __init__(self, name, email, age=None):
+        def __init__(self, name, email):
             self.name = name
             self.email = email
             self.created_at = dt.datetime.now()
-            self.friends = []
-            self.employer = None
-            self.age = age
 
         def __repr__(self):
             return '<User(name={self.name!r})>'.format(self=self)
@@ -32,10 +29,10 @@ Create a schema by defining a class with variables mapping attribute names to :c
 
 .. code-block:: python
 
-    from marshmallow import Schema, fields, pprint
+    from marshmallow import Schema, fields
 
     class UserSchema(Schema):
-        name = fields.String()
+        name = fields.Str()
         email = fields.Email()
         created_at = fields.DateTime()
 
@@ -50,6 +47,8 @@ Serializing Objects
 Serialize objects by passing them to your schema's :meth:`dump <marshmallow.Schema.dump>` method, which returns the formatted result (as well as a dictionary of validation errors, which we'll :ref:`revisit later <validation>`).
 
 .. code-block:: python
+
+    from marshmallow import pprint
 
     user = User(name="Monty", email="monty@python.org")
     schema = UserSchema()
@@ -117,7 +116,7 @@ In order to deserialize to an object, define the :meth:`make_object <Schema.make
     # Same as above, but this time we define ``make_object``
     class UserSchema(Schema):
 
-        name = fields.String()
+        name = fields.Str()
         email = fields.Email()
         created_at = fields.DateTime()
 
@@ -168,11 +167,31 @@ Validation
 .. code-block:: python
 
     data, errors = UserSchema().load({'email': 'foo'})
-    errors  # => {'email': ['foo is not a valid email address.']}
+    errors  # => {'email': ['"foo" is not a valid email address.']}
     # OR, equivalently
     result = UserSchema().load({'email': 'foo'})
-    result.errors  # => {'email': ['foo is not a valid email address.']}
+    result.errors  # => {'email': ['"foo" is not a valid email address.']}
 
+
+When validating a collection, the errors dictionary will be keyed on the indicies of invalid items.
+
+.. code-block:: python
+
+    class BandMemberSchema(Schema):
+        name = fields.String(required=True)
+        email = fields.Email()
+
+    user_data = [
+        {'email': 'mick@stones.com', 'name': 'Mick'},
+        {'email': 'invalid', 'name': 'Invalid'},  # invalid email
+        {'email': 'keith@stones.com', 'name': 'Keith'},
+        {'email': 'charlie@stones.com'},  # missing "name"
+    ]
+
+    result = BandMemberSchema(many=True).load(user_data)
+    result.errors
+    # {1: {'email': ['"invalid" is not a valid email address.']},
+    #  3: {'name': ['Missing data for required field.']}}
 
 You can perform additional validation for a field by passing it a ``validate`` callable (function, lambda, or object with ``__call__`` defined).
 
@@ -187,9 +206,10 @@ You can perform additional validation for a field by passing it a ``validate`` c
     result.errors  # => {'age': ['Validator <lambda>(71.0) is False']}
 
 
-Validation functions either return a boolean or raise a :exc:`ValidationError`. If a :exc:`ValidationError` is raised, its message is stored when validation fails.
+Validation functions either return a boolean or raise a :exc:`ValidationError`. If a :exc:`ValidationError <marshmallow.exceptions.ValidationError>` is raised, its message is stored when validation fails.
 
 .. code-block:: python
+    :emphasize-lines: 7,10,14
 
     from marshmallow import Schema, fields, ValidationError
 
@@ -208,24 +228,30 @@ Validation functions either return a boolean or raise a :exc:`ValidationError`. 
 
 .. note::
 
-    If you have multiple validations to perform, you may also pass a collection (list, tuple) or generator of callables to the ``validate`` parameter.
+    If you have multiple validations to perform, you may also pass a collection (list, tuple, generator) of callables.
 
 .. note::
 
-    :meth:`Schema.dump` also validates the format of its fields and returns a dictionary of errors. However, the callables passed to ``validate`` are only applied during deserialization.
+    :meth:`Schema.dump` also returns a dictionary of errors, which will include any ``ValidationErrors`` raised during serialization. However, the ``required``, ``allow_none``, and ``validate`` parameters only apply during deserialization.
 
-.. note::
 
-    If you set ``strict=True`` in either the Schema constructor or as a ``class Meta`` option, an error will be raised when invalid data are passed in.
+``strict`` Mode
++++++++++++++++
+
+    If you set ``strict=True`` in either the Schema constructor or as a ``class Meta`` option, an error will be raised when invalid data are passed in. You can access the dictionary of validation errors from the `ValidationError.messages <marshmallow.exceptions.ValidationError.messages>` attribute.
 
     .. code-block:: python
 
-        UserSchema(strict=True).load({'email': 'foo'})
-        # => UnmarshallingError: "foo" is not a valid email address.
+        from marshmallow import ValidationError
 
+        try:
+            UserSchema(strict=True).load({'email': 'foo'})
+        except ValidationError as err:
+            print(err.messages)# => {'email': ['"foo" is not a valid email address.']}
 
-    Alternatively, you can also register a custom error handler function for a schema using the :func:`error_handler <Schema.error_handler>` decorator. See the :ref:`Extending Schemas <extending>` page for more info.
+.. seealso::
 
+    You can register a custom error handler function for a schema using the :func:`error_handler <Schema.error_handler>` decorator. See the :ref:`Extending Schemas <extending>` page for more info.
 
 .. seealso::
 
@@ -236,15 +262,23 @@ Required Fields
 
 You can make a field required by passing ``required=True``. An error will be stored if the the value is missing from the input to :meth:`Schema.load`.
 
+Alternatively, you can provide a custom error message by passing ``required='My custom message'``.
+Dictionaries or lists are also accepted as the custom error message, in case you want to provide more information with the error.
+
 .. code-block:: python
-    :emphasize-lines: 2,6
+    :emphasize-lines: 2,3,4
 
     class UserSchema(Schema):
         name = fields.String(required=True)
+        age = fields.Integer(required='Age is required.')
+        city = fields.String(required={'message': 'City required', 'code': 400})
         email = fields.Email()
 
     data, errors = UserSchema().load({'email': 'foo@bar.com'})
-    errors  # {'name': ['Missing data for required field.']}
+    errors
+    # {'name': ['Missing data for required field.'],
+    #  'age': ['Age is required.'],
+    #  'city': {'message': 'City required', 'code': 400}}
 
 Schema.validate
 +++++++++++++++
@@ -260,7 +294,7 @@ If you only need to validate input data (without deserializing to an object), yo
 Specifying Attribute Names
 --------------------------
 
-By default, `Schemas` will marshal the object attributes that have the same name as the fields. However, you may want to have different field and attribute names. In this case, you can explicitly specify which attribute names to use.
+By default, `Schemas` will marshal the object attributes that are identical to the schema's field names. However, you may want to have different field and attribute names. In this case, you can explicitly specify which attribute names to use.
 
 .. code-block:: python
     :emphasize-lines: 3,4,11,12
@@ -278,6 +312,27 @@ By default, `Schemas` will marshal the object attributes that have the same name
     #  'email_addr': 'keith@stones.com',
     #  'date_created': '2014-08-17T14:58:57.600623+00:00'}
 
+
+Specifying Deserialization Keys
+-------------------------------
+
+By default `Schemas` will unmarshal an input dictionary to an output dictionary whose keys are identical to the field names.  However, if you are consuming data that does not exactly match your schema, you can specify additional keys to load values by passing the `load_from` argument.
+
+.. code-block:: python
+    :emphasize-lines: 2,3,11,12
+
+    class UserSchema(Schema):
+        name = fields.String()
+        email = fields.Email(load_from='emailAddress')
+
+    data = {
+        'name': 'Mike',
+        'emailAddress': 'foo@bar.com'
+    }
+    s = UserSchema()
+    result, errors = s.load(data)
+    #{'name': u'Mike',
+    # 'email': 'foo@bar.com'}
 
 .. _meta_options:
 
@@ -312,7 +367,8 @@ Note that ``name`` will be automatically formatted as a :class:`String <marshmal
         class UserSchema(Schema):
             uppername = fields.Function(lambda obj: obj.name.upper())
             class Meta:
-                additional = ("name", "email", "created_at")  # No need to include 'uppername'
+                # No need to include 'uppername'
+                additional = ("name", "email", "created_at")
 
 Ordering Output
 ---------------

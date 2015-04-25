@@ -2,6 +2,7 @@
 import pytest
 
 from marshmallow import fields
+from marshmallow.marshalling import missing
 
 from tests.base import ALL_FIELDS
 
@@ -19,14 +20,19 @@ class TestFieldAliases:
     def test_bool_is_boolean(self):
         assert fields.Bool is fields.Boolean
 
+    def test_URL_is_Url(self):  # flake8: noqa
+        assert fields.URL is fields.Url
+
 class TestField:
 
     def test_repr(self):
         default = u'œ∑´'
         field = fields.Field(default=default, attribute=None)
         assert repr(field) == (u'<fields.Field(default={0!r}, attribute=None, '
-                                'error=None, validate=None, required=False)>'
-                                .format(default))
+                                'error=None, validate=None, required=False, '
+                                'load_only=False, dump_only=False, '
+                                'missing={missing}, allow_none=False)>'
+                                .format(default, missing=missing))
         int_field = fields.Integer(validate=lambda x: True)
         assert '<fields.Integer' in repr(int_field)
 

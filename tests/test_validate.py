@@ -78,6 +78,13 @@ def test_url_relative_invalid(invalid_url):
     with pytest.raises(ValidationError):
         validator(invalid_url)
 
+def test_url_custom_message():
+    validator = validate.URL(error="{input} ain't an URL")
+    with pytest.raises(ValidationError) as excinfo:
+        validator('invalid')
+    assert "invalid ain't an URL" in str(excinfo)
+
+
 @pytest.mark.parametrize('valid_email', [
     'niceandsimple@example.com',
     'NiCeAnDsImPlE@eXaMpLe.CoM',
@@ -113,6 +120,13 @@ def test_email_invalid(invalid_email):
     with pytest.raises(ValidationError):
         validator(invalid_email)
 
+def test_email_custom_message():
+    validator = validate.Email(error='{input} is not an email addy.')
+    with pytest.raises(ValidationError) as excinfo:
+        validator('invalid')
+    assert 'invalid is not an email addy.' in str(excinfo)
+
+
 def test_range_min():
     assert validate.Range(1, 2)(1) == 1
     assert validate.Range(0)(1) == 1
@@ -134,6 +148,23 @@ def test_range_max():
         validate.Range(0, 1)(2)
     with pytest.raises(ValidationError):
         validate.Range(None, 1)(2)
+
+def test_range_custom_message():
+    v = validate.Range(2, 3, error='{input} is not between {min} and {max}')
+    with pytest.raises(ValidationError) as excinfo:
+        v(1)
+    assert '1 is not between 2 and 3' in str(excinfo)
+
+    v = validate.Range(2, None, error='{input} is less than {min}')
+    with pytest.raises(ValidationError) as excinfo:
+        v(1)
+    assert '1 is less than 2' in str(excinfo)
+
+    v = validate.Range(None, 3, error='{input} is greater than {max}')
+    with pytest.raises(ValidationError) as excinfo:
+        v(4)
+    assert '4 is greater than 3' in str(excinfo)
+
 
 def test_length_min():
     assert validate.Length(3, 5)('foo') == 'foo'
@@ -173,6 +204,23 @@ def test_length_max():
     with pytest.raises(ValidationError):
         validate.Length(None, 2)([1, 2, 3])
 
+def test_length_custom_message():
+    v = validate.Length(5, 6, error='{input} is not between {min} and {max}')
+    with pytest.raises(ValidationError) as excinfo:
+        v('foo')
+    assert 'foo is not between 5 and 6' in str(excinfo)
+
+    v = validate.Length(5, None, error='{input} is shorter than {min}')
+    with pytest.raises(ValidationError) as excinfo:
+        v('foo')
+    assert 'foo is shorter than 5' in str(excinfo)
+
+    v = validate.Length(None, 2, error='{input} is longer than {max}')
+    with pytest.raises(ValidationError) as excinfo:
+        v('foo')
+    assert 'foo is longer than 2' in str(excinfo)
+
+
 def test_equal():
     assert validate.Equal('a')('a') == 'a'
     assert validate.Equal(1)(1) == 1
@@ -184,6 +232,13 @@ def test_equal():
         validate.Equal(2)(1)
     with pytest.raises(ValidationError):
         validate.Equal([2])([1])
+
+def test_equal_custom_message():
+    v = validate.Equal('a', error='{input} is not equal to {other}.')
+    with pytest.raises(ValidationError) as excinfo:
+        v('b')
+    assert 'b is not equal to a.' in str(excinfo)
+
 
 def test_regexp_str():
     assert validate.Regexp(r'a')('a') == 'a'
@@ -218,6 +273,14 @@ def test_regexp_compile():
     with pytest.raises(ValidationError):
         validate.Regexp(re.compile(r'a'), re.IGNORECASE)('A')
 
+def test_regexp_custom_message():
+    rex = r'[0-9]+'
+    v = validate.Regexp(rex, error='{input} does not match {regex}')
+    with pytest.raises(ValidationError) as excinfo:
+        v('a')
+    assert 'a does not match [0-9]+' in str(excinfo)
+
+
 def test_predicate():
     class Dummy(object):
         def _true(self):
@@ -243,8 +306,9 @@ def test_predicate():
     assert validate.Predicate('_identity', arg=1)(d) == d
     assert validate.Predicate('_identity', arg='abc')(d) == d
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as excinfo:
         validate.Predicate('_false')(d)
+    assert 'Invalid input.' in str(excinfo)
     with pytest.raises(ValidationError):
         validate.Predicate('_empty')(d)
     with pytest.raises(ValidationError):
@@ -254,22 +318,214 @@ def test_predicate():
     with pytest.raises(ValidationError):
         validate.Predicate('_identity', arg='')(d)
 
+def test_predicate_custom_message():
+    class Dummy(object):
+        def _false(self):
+            return False
+
+        def __str__(self):
+            return 'Dummy'
+    d = Dummy()
+    with pytest.raises(ValidationError) as excinfo:
+        validate.Predicate('_false', error='{input}.{method} is invalid!')(d)
+    assert 'Dummy._false is invalid!' in str(excinfo)
+
+
 def test_noneof():
     assert validate.NoneOf([1, 2, 3])(4) == 4
     assert validate.NoneOf('abc')('d') == 'd'
-    assert validate.NoneOf((i for i in [1, 2]))(3) == 3
     assert validate.NoneOf('')([]) == []
     assert validate.NoneOf([])('') == ''
     assert validate.NoneOf([])([]) == []
     assert validate.NoneOf([1, 2, 3])(None) is None
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as excinfo:
         validate.NoneOf([1, 2, 3])(3)
+    assert 'Invalid input.' in str(excinfo)
     with pytest.raises(ValidationError):
         validate.NoneOf('abc')('c')
-    with pytest.raises(ValidationError):
-        validate.NoneOf((i for i in [1, 2]))(2)
     with pytest.raises(ValidationError):
         validate.NoneOf([1, 2, None])(None)
     with pytest.raises(ValidationError):
         validate.NoneOf('')('')
+
+def test_noneof_custom_message():
+    with pytest.raises(ValidationError) as excinfo:
+        validate.NoneOf([1, 2], error='<not valid>')(1)
+    assert '<not valid>' in str(excinfo)
+
+    none_of = validate.NoneOf(
+        [1, 2],
+        error='{input} cannot be one of {values}'
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        none_of(1)
+    assert '1 cannot be one of 1, 2' in str(excinfo)
+
+
+def test_oneof():
+    assert validate.OneOf([1, 2, 3])(2) == 2
+    assert validate.OneOf('abc')('b') == 'b'
+    assert validate.OneOf('')('') == ''
+    assert validate.OneOf(dict(a=0, b=1))('a') == 'a'
+    assert validate.OneOf((1, 2, None))(None) is None
+
+    with pytest.raises(ValidationError) as excinfo:
+        validate.OneOf([1, 2, 3])(4)
+    assert 'Not a valid choice.' in str(excinfo)
+    with pytest.raises(ValidationError):
+        validate.OneOf('abc')('d')
+    with pytest.raises(ValidationError):
+        validate.OneOf((1, 2, 3))(None)
+    with pytest.raises(ValidationError):
+        validate.OneOf([])([])
+    with pytest.raises(ValidationError):
+        validate.OneOf(())(())
+    with pytest.raises(ValidationError):
+        validate.OneOf(dict(a=0, b=1))(0)
+    with pytest.raises(ValidationError):
+        validate.OneOf('123')(1)
+
+def test_oneof_options():
+    oneof = validate.OneOf([1, 2, 3], ['one', 'two', 'three'])
+    expected = [('1', 'one'), ('2', 'two'), ('3', 'three')]
+    assert list(oneof.options()) == expected
+
+    oneof = validate.OneOf([1, 2, 3], ['one', 'two'])
+    expected = [('1', 'one'), ('2', 'two'), ('3', '')]
+    assert list(oneof.options()) == expected
+
+    oneof = validate.OneOf([1, 2], ['one', 'two', 'three'])
+    expected = [('1', 'one'), ('2', 'two'), ('', 'three')]
+    assert list(oneof.options()) == expected
+
+    oneof = validate.OneOf([1, 2])
+    expected = [('1', ''), ('2', '')]
+    assert list(oneof.options()) == expected
+
+def test_oneof_text():
+    oneof = validate.OneOf([1, 2, 3], ['one', 'two', 'three'])
+    assert oneof.choices_text == '1, 2, 3'
+    assert oneof.labels_text == 'one, two, three'
+
+    oneof = validate.OneOf([1], ['one'])
+    assert oneof.choices_text == '1'
+    assert oneof.labels_text == 'one'
+
+    oneof = validate.OneOf(dict(a=0, b=1))
+    assert ', '.join(sorted(oneof.choices_text.split(', '))) == 'a, b'
+    assert oneof.labels_text == ''
+
+def test_oneof_custom_message():
+    oneof = validate.OneOf([1, 2, 3], error='{input} is not one of {choices}')
+    expected = '4 is not one of 1, 2, 3'
+    with pytest.raises(ValidationError) as excinfo:
+        oneof(4)
+    assert expected in str(expected)
+
+    oneof = validate.OneOf([1, 2, 3],
+        ['one', 'two', 'three'],
+        error='{input} is not one of {labels}'
+    )
+    expected = '4 is not one of one, two, three'
+    with pytest.raises(ValidationError) as excinfo:
+        oneof(4)
+    assert expected in str(expected)
+
+def test_containsonly_in_list():
+    assert validate.ContainsOnly([])([]) == []
+    assert validate.ContainsOnly([1, 2, 3])([1]) == [1]
+    assert validate.ContainsOnly([1, 1, 2])([1, 1]) == [1, 1]
+    assert validate.ContainsOnly([1, 2, 3])([1, 2]) == [1, 2]
+    assert validate.ContainsOnly([1, 2, 3])([2, 1]) == [2, 1]
+    assert validate.ContainsOnly([1, 2, 3])([1, 2, 3]) == [1, 2, 3]
+    assert validate.ContainsOnly([1, 2, 3])([3, 1, 2]) == [3, 1, 2]
+    assert validate.ContainsOnly([1, 2, 3])([2, 3, 1]) == [2, 3, 1]
+
+    with pytest.raises(ValidationError):
+        validate.ContainsOnly([1, 2, 3])([4])
+    with pytest.raises(ValidationError):
+        validate.ContainsOnly([1, 2, 3])([])
+    with pytest.raises(ValidationError):
+        validate.ContainsOnly([])([1])
+
+def test_contains_only_unhashable_types():
+
+    assert validate.ContainsOnly([[1], [2], [3]])([[1]]) == [[1]]
+    assert validate.ContainsOnly([[1], [1], [2]])([[1], [1]]) == [[1], [1]]
+    assert validate.ContainsOnly([[1], [2], [3]])([[1], [2]]) == [[1], [2]]
+    assert validate.ContainsOnly([[1], [2], [3]])([[2], [1]]) == [[2], [1]]
+    assert validate.ContainsOnly([[1], [2], [3]])([[1], [2], [3]]) == [[1], [2], [3]]
+    assert validate.ContainsOnly([[1], [2], [3]])([[3], [1], [2]]) == [[3], [1], [2]]
+    assert validate.ContainsOnly([[1], [2], [3]])([[2], [3], [1]]) == [[2], [3], [1]]
+
+    with pytest.raises(ValidationError):
+        validate.ContainsOnly([[1], [2], [3]])([[4]])
+    with pytest.raises(ValidationError):
+        validate.ContainsOnly([[1], [2], [3]])([])
+    with pytest.raises(ValidationError):
+        validate.ContainsOnly([])([1])
+
+def test_containsonly_in_tuple():
+    assert validate.ContainsOnly(())(()) == ()
+    assert validate.ContainsOnly((1, 2, 3))((1,)) == (1,)
+    assert validate.ContainsOnly((1, 1, 2))((1, 1)) == (1, 1)
+    assert validate.ContainsOnly((1, 2, 3))((1, 2)) == (1, 2)
+    assert validate.ContainsOnly((1, 2, 3))((2, 1)) == (2, 1)
+    assert validate.ContainsOnly((1, 2, 3))((1, 2, 3)) == (1, 2, 3)
+    assert validate.ContainsOnly((1, 2, 3))((3, 1, 2)) == (3, 1, 2)
+    assert validate.ContainsOnly((1, 2, 3))((2, 3, 1)) == (2, 3, 1)
+
+    with pytest.raises(ValidationError):
+        validate.ContainsOnly((1, 2, 3))((4,))
+    with pytest.raises(ValidationError):
+        validate.ContainsOnly((1, 2, 3))(())
+    with pytest.raises(ValidationError):
+        validate.ContainsOnly(())((1,))
+
+
+def test_contains_only_in_string():
+
+    assert validate.ContainsOnly('')('') == ''
+    assert validate.ContainsOnly('abc')('a') == 'a'
+    assert validate.ContainsOnly('aab')('aa') == 'aa'
+    assert validate.ContainsOnly('abc')('ab') == 'ab'
+    assert validate.ContainsOnly('abc')('ba') == 'ba'
+    assert validate.ContainsOnly('abc')('abc') == 'abc'
+    assert validate.ContainsOnly('abc')('cab') == 'cab'
+    assert validate.ContainsOnly('abc')('bca') == 'bca'
+
+    with pytest.raises(ValidationError):
+        validate.ContainsOnly('abc')('d')
+    with pytest.raises(ValidationError):
+        validate.ContainsOnly('abc')('')
+    with pytest.raises(ValidationError):
+        validate.ContainsOnly('')('a')
+
+def test_contains_only_invalid():
+    with pytest.raises(ValidationError) as excinfo:
+        validate.ContainsOnly([1, 2, 3])([1, 1])
+    assert 'One or more of the choices you made was not acceptable.' in str(excinfo)
+    with pytest.raises(ValidationError):
+        validate.ContainsOnly([1, 1, 2])([2, 2])
+    with pytest.raises(ValidationError):
+        validate.ContainsOnly([1, 1, 2])([1, 1, 1])
+
+def test_containsonly_custom_message():
+    containsonly = validate.ContainsOnly(
+        [1, 2, 3],
+        error='{input} is not one of {choices}'
+    )
+    expected = '4, 5 is not one of 1, 2, 3'
+    with pytest.raises(ValidationError) as excinfo:
+        containsonly([4, 5])
+    assert expected in str(expected)
+
+    containsonly = validate.ContainsOnly([1, 2, 3],
+        ['one', 'two', 'three'],
+        error='{input} is not one of {labels}'
+    )
+    expected = '4, 5 is not one of one, two, three'
+    with pytest.raises(ValidationError) as excinfo:
+        containsonly([4, 5])
+    assert expected in str(expected)
