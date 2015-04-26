@@ -6,7 +6,7 @@ import random
 
 import pytest
 
-from marshmallow import Schema, fields, utils, MarshalResult, UnmarshalResult
+from marshmallow import Schema, fields, utils, MarshalResult, UnmarshalResult, validate
 from marshmallow.exceptions import ValidationError
 from marshmallow.compat import unicode, OrderedDict
 
@@ -115,6 +115,27 @@ def test_load_resets_error_fields():
 
     assert len(exc.fields) == 1
     assert len(exc.field_names) == 1
+
+def test_errored_fields_do_not_appear_in_output():
+
+    class MyField(fields.Field):
+        # Make sure validation fails during serialization
+        def _serialize(self, val, attr, obj):
+            raise ValidationError('oops')
+
+    class MySchema(Schema):
+        foo = MyField(validate=lambda x: False)
+
+    sch = MySchema()
+    data, errors = sch.load({'foo': 2})
+
+    assert 'foo' in errors
+    assert 'foo' not in data
+
+    data, errors = sch.dump({'foo': 2})
+
+    assert 'foo' in errors
+    assert 'foo' not in data
 
 def test_load_many_stores_error_indices():
     s = UserSchema()
@@ -503,8 +524,8 @@ def test_serializing_dict(user):
     user = {"name": "foo", "email": "foo@bar.com", "age": 'badage'}
     s = UserSchema().dump(user)
     assert s.data['name'] == "foo"
-    assert s.data['age'] is None
     assert 'age' in s.errors
+    assert 'age' not in s.data
 
 @pytest.mark.parametrize('SchemaClass',
     [UserSchema, UserMetaSchema])
@@ -605,27 +626,24 @@ def test_load_errors_with_many():
     assert 'anotherbademail' in errors[2]['email'][0]
 
 def test_error_raised_if_fields_option_is_not_list():
-    class BadSchema(Schema):
-        name = fields.String()
-
-        class Meta:
-            fields = 'name'
-
     u = User('Joe')
     with pytest.raises(ValueError):
-        BadSchema(u)
+        class BadSchema(Schema):
+            name = fields.String()
+
+            class Meta:
+                fields = 'name'
 
 
 def test_error_raised_if_additional_option_is_not_list():
-    class BadSchema(Schema):
-        name = fields.String()
-
-        class Meta:
-            additional = 'email'
-
     u = User('Joe')
     with pytest.raises(ValueError):
-        BadSchema(u)
+        class BadSchema(Schema):
+            name = fields.String()
+
+            class Meta:
+                additional = 'email'
+
 
 def test_only_and_exclude():
     class MySchema(Schema):
@@ -711,18 +729,16 @@ def test_exclude_fields(user):
     assert "name" in s.data
 
 def test_fields_option_must_be_list_or_tuple(user):
-    class BadFields(Schema):
-        class Meta:
-            fields = "name"
     with pytest.raises(ValueError):
-        BadFields(user)
+        class BadFields(Schema):
+            class Meta:
+                fields = "name"
 
 def test_exclude_option_must_be_list_or_tuple(user):
-    class BadExclude(Schema):
-        class Meta:
-            exclude = "name"
     with pytest.raises(ValueError):
-        BadExclude(user)
+        class BadExclude(Schema):
+            class Meta:
+                exclude = "name"
 
 def test_dateformat_option(user):
     fmt = '%Y-%m'
@@ -777,14 +793,13 @@ def test_additional(user):
     assert s.data['name'] == user.name
 
 def test_cant_set_both_additional_and_fields(user):
-    class BadSchema(Schema):
-        name = fields.String()
-
-        class Meta:
-            fields = ("name", 'email')
-            additional = ('email', 'homepage')
     with pytest.raises(ValueError):
-        BadSchema(user)
+        class BadSchema(Schema):
+            name = fields.String()
+
+            class Meta:
+                fields = ("name", 'email')
+                additional = ('email', 'homepage')
 
 def test_serializing_none_meta():
     s = UserMetaSchema().dump(None)
@@ -1506,7 +1521,7 @@ class TestNestedSchema:
             foo = fields.Nested(InnerSchema)
 
         class MySchema2(Schema):
-            foo = fields.Nested(InnerSchema, allow_null=True)
+            foo = fields.Nested(InnerSchema)
 
         s = MySchema()
         result = s.dump({'foo': None})
@@ -1527,7 +1542,7 @@ class TestNestedSchema:
 
     def test_nested_field_does_not_validate_required(self):
         class BlogRequiredSchema(Schema):
-            user = fields.Nested(UserSchema, required=True, allow_null=True)
+            user = fields.Nested(UserSchema, required=True)
 
         b = Blog('Authorless blog', user=None)
         _, errs = BlogRequiredSchema().dump(b)

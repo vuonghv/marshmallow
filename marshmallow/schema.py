@@ -6,6 +6,7 @@ from collections import defaultdict
 import copy
 import datetime as dt
 import decimal
+import inspect
 import json
 import types
 import uuid
@@ -26,7 +27,7 @@ MarshalResult = namedtuple('MarshalResult', ['data', 'errors'])
 UnmarshalResult = namedtuple('UnmarshalResult', ['data', 'errors'])
 
 def _get_fields(attrs, field_class, pop=False, ordered=False):
-    """Get fields from a class, sorted by creation index.
+    """Get fields from a class. If ordered=True, fields will sorted by creation index.
 
     :param attrs: Mapping of class attributes
     :param type field_class: Base field class
@@ -56,6 +57,8 @@ def _get_fields_by_mro(klass, field_class, ordered=False):
     :param type klass: Class whose fields to retrieve
     :param type field_class: Base field class
     """
+    mro = inspect.getmro(klass)
+    # Loop over mro in reverse to maintain correct order of fields
     return sum(
         (
             _get_fields(
@@ -63,7 +66,7 @@ def _get_fields_by_mro(klass, field_class, ordered=False):
                 field_class,
                 ordered=ordered
             )
-            for base in klass.mro()[:0:-1]
+            for base in mro[:0:-1]
         ),
         [],
     )
@@ -72,7 +75,8 @@ def _get_fields_by_mro(klass, field_class, ordered=False):
 class SchemaMeta(type):
     """Metaclass for the Schema class. Binds the declared fields to
     a ``_declared_fields`` attribute, which is a dictionary mapping attribute
-    names to field objects.
+    names to field objects. Also sets the ``opts`` class attribute, which is
+    the Schema class's ``class Meta`` options.
     """
     FUNC_LISTS = ('__validators__', '__data_handlers__', '__preprocessors__')
 
@@ -81,49 +85,78 @@ class SchemaMeta(type):
         ordered = getattr(meta, 'ordered', False)
         if not ordered:
             # Inherit 'ordered' option
-            # Warning: We loop through bases in reverse order rather than
-            # looping through the MRO because we don't yet have access to the
-            # class object (i.e. can't call super before we have fields)
-            ordered = next(
-                (base for base in bases[::-1]
-                if hasattr(base, 'Meta') and getattr(base.Meta, 'ordered', False)),
-                False
-            )
-        include = list(getattr(meta, 'include', {}).items())
-        fields = _get_fields(attrs, base.FieldABC, pop=True, ordered=ordered) + include
+            # Warning: We loop through bases instead of MRO because we don't
+            # yet have access to the class object
+            # (i.e. can't call super before we have fields)
+            for base_ in bases:
+                if hasattr(base_, 'Meta') and hasattr(base_.Meta, 'ordered'):
+                    ordered = base_.Meta.ordered
+                    break
+            else:
+                ordered = False
+        cls_fields = _get_fields(attrs, base.FieldABC, pop=True, ordered=ordered)
         klass = super(SchemaMeta, mcs).__new__(mcs, name, bases, attrs)
-        fields = _get_fields_by_mro(klass, base.FieldABC) + fields
+        inherited_fields = _get_fields_by_mro(klass, base.FieldABC)
+
+        # Use getattr rather than attrs['Meta'] so that we get inheritance for free
+        meta = getattr(klass, 'Meta')
+        # Set klass.opts in __new__ rather than __init__ so that it is accessible in
+        # get_declared_fields
+        klass.opts = klass.OPTIONS_CLASS(meta)
+        # Add fields specifid in the `include` class Meta option
+        cls_fields += list(klass.opts.include.items())
+
         dict_cls = OrderedDict if ordered else dict
-        klass._declared_fields = dict_cls(fields)
-        class_registry.register(name, klass)
-
-        mcs._copy_func_attrs(klass)
-        mcs._resolve_processors(klass)
-
+        # Assign _declared_fields on class
+        klass._declared_fields = mcs.get_declared_fields(
+            klass=klass,
+            cls_fields=cls_fields,
+            inherited_fields=inherited_fields,
+            dict_cls=dict_cls
+        )
         return klass
 
     @classmethod
-    def _copy_func_attrs(mcs, klass):
+    def get_declared_fields(mcs, klass, cls_fields, inherited_fields, dict_cls):
+        """Returns a dictionary of field_name => `Field` pairs declard on the class.
+        This is exposed mainly so that plugins can add additional fields, e.g. fields
+        computed from class Meta options.
+
+        :param type klass: The class object.
+        :param dict cls_fields: The fields declared on the class, including those added
+            by the ``include`` class Meta option.
+        :param dict inherited_fileds: Inherited fields.
+        :param type dict_class: Either `dict` or `OrderedDict`, depending on the whether
+            the user specified `ordered=True`.
+        """
+        return dict_cls(inherited_fields + cls_fields)
+
+    # NOTE: self is the class object
+    def __init__(self, name, bases, attrs):
+        super(SchemaMeta, self).__init__(name, bases, attrs)
+        class_registry.register(name, self)
+        self._copy_func_attrs()
+        self._resolve_processors()
+
+    def _copy_func_attrs(self):
         """Copy non-shareable class function lists
 
         Need to copy validators, data handlers, and preprocessors lists so they
         are not shared among subclasses and ancestors.
         """
-        for attr in mcs.FUNC_LISTS:
-            attr_copy = copy.copy(getattr(klass, attr))
-            setattr(klass, attr, attr_copy)
+        for attr in self.FUNC_LISTS:
+            attr_copy = copy.copy(getattr(self, attr))
+            setattr(self, attr, attr_copy)
 
-    @staticmethod
-    def _resolve_processors(klass):
+    def _resolve_processors(self):
         """Add in the decorated processors
 
         By doing this after constructing the class, we let standard inheritance
         do all the hard work.
         """
-        mro = klass.mro()
-
-        klass.__processors__ = defaultdict(list)
-        for attr_name in dir(klass):
+        mro = inspect.getmro(self)
+        self.__processors__ = defaultdict(list)
+        for attr_name in dir(self):
             # Need to look up the actual descriptor, not whatever might be
             # bound to the class. This needs to come from the __dict__ of the
             # declaring class.
@@ -148,7 +181,7 @@ class SchemaMeta(type):
             for tag in processor_tags:
                 # Use name here so we can get the bound method later, in case
                 # the processor was a descriptor or something.
-                klass.__processors__[tag].append(attr_name)
+                self.__processors__[tag].append(attr_name)
 
 
 class SchemaOpts(object):
@@ -288,6 +321,10 @@ class BaseSchema(base.SchemaABC):
             `collections.OrderedDict`.
         - ``index_errors``: If `True`, errors dictionaries will include the index
             of invalid items in a collection.
+
+        .. versionchanged:: 2.0.0
+            `__preprocessors__` and `__data_handlers__` are deprecated. Use
+            `marshmallow.decorators.pre_load` and `marshmallow.decorators.post_dump` instead.
         """
         pass
 
@@ -296,7 +333,6 @@ class BaseSchema(base.SchemaABC):
         # copy declared fields from metaclass
         self.declared_fields = copy.deepcopy(self._declared_fields)
         self.many = many
-        self.opts = self.OPTIONS_CLASS(self.Meta)
         self.only = only
         self.exclude = exclude
         self.prefix = prefix

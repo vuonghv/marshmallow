@@ -105,15 +105,18 @@ class KeepOrder(Schema):
     class Meta:
         ordered = True
 
-    name = fields.String()
-    email = fields.Email()
+    name = fields.String(allow_none=True)
+    email = fields.Email(allow_none=True)
     age = fields.Integer()
     created = fields.DateTime()
-    id = fields.Integer()
+    id = fields.Integer(allow_none=True)
     homepage = fields.Url()
-    birthdate = fields.DateTime()
+    birthdate = fields.Date()
 
 class OrderedMetaSchema(Schema):
+    id = fields.Int(allow_none=True)
+    email = fields.Email(allow_none=True)
+
     class Meta:
         fields = ('name', 'email', 'age', 'created',
                     'id', 'homepage', 'birthdate')
@@ -128,16 +131,32 @@ class OrderedNestedOnly(Schema):
 class TestFieldOrdering:
 
     def test_ordered_option_is_inherited(self, user):
-        class ChildOrderedSchema(KeepOrder):
+        class ParentUnordered(Schema):
+            class Meta:
+                ordered = False
+
+        # KeepOrder is before ParentUnordered in MRO,
+        # so ChildOrderedSchema will be ordered
+        class ChildOrderedSchema(KeepOrder, ParentUnordered):
             pass
 
         schema = ChildOrderedSchema()
         assert schema.opts.ordered is True
         assert schema.dict_class == OrderedDict
 
-        data, _ = schema.dump(user)
+        data, errors = schema.dump(user)
+        assert not errors
         keys = list(data)
         assert keys == ['name', 'email', 'age', 'created', 'id', 'homepage', 'birthdate']
+
+        # KeepOrder is before ParentUnordered in MRO,
+        # so ChildOrderedSchema will be ordered
+        class ChildUnorderedSchema(ParentUnordered, KeepOrder):
+            class Meta:
+                pass
+
+        schema = ChildUnorderedSchema()
+        assert schema.opts.ordered is False
 
     def test_ordering_is_off_by_default(self):
         class DummySchema(Schema):
@@ -155,6 +174,7 @@ class TestFieldOrdering:
     def test_declared_field_order_is_maintained_on_load(self, serialized_user):
         schema = KeepOrder()
         data, errs = schema.load(serialized_user.data)
+        assert not errs
         keys = list(data)
         assert keys == ['name', 'email', 'age', 'created', 'id', 'homepage', 'birthdate']
 
@@ -202,6 +222,7 @@ class TestFieldOrdering:
     def test_meta_fields_order_is_maintained_on_load(self, serialized_user):
         schema = OrderedMetaSchema()
         data, errs = schema.load(serialized_user.data)
+        assert not errs
         keys = list(data)
         assert keys == ['name', 'email', 'age', 'created', 'id', 'homepage', 'birthdate']
 
