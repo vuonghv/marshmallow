@@ -1,6 +1,20 @@
 Changelog
 ---------
 
+2.0.0b2 (2015-05-03)
+++++++++++++++++++++
+
+Features:
+
+- Add useful ``__repr__`` methods to validators (:issue:`204`). Thanks :user:`philtay`.
+- *Backwards-incompatible*: By default, ``NaN``, ``Infinity``, and ``-Infinity`` are invalid values for ``fields.Decimal``. Pass ``allow_nan=True`` to allow these values. Thanks :user:`philtay`.
+
+Changes from 2.0.0b1:
+
+- Fix serialization of ``None`` for `Time`, `TimeDelta`, and `Date` fields (a regression introduced in 2.0.0a1).
+
+Includes bug fixes from 1.2.6.
+
 2.0.0b1 (2015-04-26)
 ++++++++++++++++++++
 
@@ -56,6 +70,14 @@ Other changes:
 
 - ``Marshaller``, ``Unmarshaller`` were moved to ``marshmallow.marshalling``. These should be considered private API (:issue:`129`).
 - Make ``allow_null=True`` the default for ``Nested`` fields. This will make ``None`` serialize to ``None`` rather than a dictionary with empty values (:issue:`132`). Thanks :user:`nickrellack` for the suggestion.
+
+1.2.6 (2015-05-03)
+++++++++++++++++++
+
+Bug fixes:
+
+- Fix validation error message for ``fields.Decimal``.
+- Allow error message for ``fields.Boolean`` to be customized with the ``error`` parameter (like other fields).
 
 1.2.5 (2015-04-25)
 ++++++++++++++++++

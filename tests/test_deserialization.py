@@ -90,9 +90,10 @@ class TestFieldDeserialization:
         assert field.deserialize(m2) == decimal.Decimal('12.355')
         assert isinstance(field.deserialize(m3), decimal.Decimal)
         assert field.deserialize(m3) == decimal.Decimal(1)
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as excinfo:
             field.deserialize(m4)
-        with pytest.raises(ValidationError):
+        assert excinfo.value.args[0] == 'Invalid decimal value.'
+        with pytest.raises(ValidationError) as excinfo:
             field.deserialize(m5)
 
     def test_decimal_field_with_places(self):
@@ -109,8 +110,9 @@ class TestFieldDeserialization:
         assert field.deserialize(m2) == decimal.Decimal('12.4')
         assert isinstance(field.deserialize(m3), decimal.Decimal)
         assert field.deserialize(m3) == decimal.Decimal(1)
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as excinfo:
             field.deserialize(m4)
+        assert excinfo.value.args[0] == 'Invalid decimal value.'
         with pytest.raises(ValidationError):
             field.deserialize(m5)
 
@@ -152,6 +154,74 @@ class TestFieldDeserialization:
         with pytest.raises(ValidationError):
             field.deserialize(m5)
 
+    def test_decimal_field_special_values(self):
+        m1 = '-NaN'
+        m2 = 'NaN'
+        m3 = '-sNaN'
+        m4 = 'sNaN'
+        m5 = '-Infinity'
+        m6 = 'Infinity'
+        m7 = '-0'
+
+        field = fields.Decimal(places=2, allow_nan=True)
+
+        m1d = field.deserialize(m1)
+        assert isinstance(m1d, decimal.Decimal)
+        assert m1d.is_qnan() and not m1d.is_signed()
+
+        m2d = field.deserialize(m2)
+        assert isinstance(m2d, decimal.Decimal)
+        assert m2d.is_qnan() and not m2d.is_signed()
+
+        m3d = field.deserialize(m3)
+        assert isinstance(m3d, decimal.Decimal)
+        assert m3d.is_qnan() and not m3d.is_signed()
+
+        m4d = field.deserialize(m4)
+        assert isinstance(m4d, decimal.Decimal)
+        assert m4d.is_qnan() and not m4d.is_signed()
+
+        m5d = field.deserialize(m5)
+        assert isinstance(m5d, decimal.Decimal)
+        assert m5d.is_infinite() and m5d.is_signed()
+
+        m6d = field.deserialize(m6)
+        assert isinstance(m6d, decimal.Decimal)
+        assert m6d.is_infinite() and not m6d.is_signed()
+
+        m7d = field.deserialize(m7)
+        assert isinstance(m7d, decimal.Decimal)
+        assert m7d.is_zero() and m7d.is_signed()
+
+    def test_decimal_field_special_values_not_permitted(self):
+        m1 = '-NaN'
+        m2 = 'NaN'
+        m3 = '-sNaN'
+        m4 = 'sNaN'
+        m5 = '-Infinity'
+        m6 = 'Infinity'
+        m7 = '-0'
+
+        field = fields.Decimal(places=2)
+
+        with pytest.raises(ValidationError) as excinfo:
+            field.deserialize(m1)
+        assert str(excinfo.value.args[0]) == 'Special numeric values are not permitted.'
+        with pytest.raises(ValidationError):
+            field.deserialize(m2)
+        with pytest.raises(ValidationError):
+            field.deserialize(m3)
+        with pytest.raises(ValidationError):
+            field.deserialize(m4)
+        with pytest.raises(ValidationError):
+            field.deserialize(m5)
+        with pytest.raises(ValidationError):
+            field.deserialize(m6)
+
+        m7d = field.deserialize(m7)
+        assert isinstance(m7d, decimal.Decimal)
+        assert m7d.is_zero() and m7d.is_signed()
+
     def test_string_field_deserialization(self):
         field = fields.String()
         assert field.deserialize(42) == '42'
@@ -187,8 +257,17 @@ class TestFieldDeserialization:
         class MyBoolean(fields.Boolean):
             truthy = set(['yep'])
         field = MyBoolean()
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as excinfo:
             field.deserialize(in_val)
+        expected_msg = '{0!r} is not in {1} nor {2}'.format(
+            text_type(in_val), field.truthy, field.falsy
+        )
+        assert str(excinfo.value.args[0]) == expected_msg
+
+        field2 = MyBoolean(error='bad input')
+        with pytest.raises(ValidationError) as excinfo:
+            field2.deserialize(in_val)
+        assert str(excinfo.value.args[0]) == 'bad input'
 
     def test_arbitrary_field_deserialization(self):
         field = fields.Arbitrary()
