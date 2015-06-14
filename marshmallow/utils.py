@@ -12,9 +12,8 @@ from calendar import timegm
 from decimal import Decimal, ROUND_HALF_EVEN, Context, Inexact
 from email.utils import formatdate, parsedate
 from pprint import pprint as py_pprint
-import warnings
 
-from marshmallow.compat import basestring, OrderedDict, binary_type, text_type
+from marshmallow.compat import OrderedDict, binary_type, text_type
 
 
 dateutil_available = False
@@ -313,14 +312,12 @@ def _get_value_for_keys(keys, obj, default):
 
 
 def _get_value_for_key(key, obj, default):
-    if isinstance(obj, dict):
-        return obj.get(key, default)
-    if isinstance(key, basestring) and hasattr(obj, key):
-        return getattr(obj, key)
-    if is_indexable_but_not_string(obj):
+    try:
+        return obj[key]
+    except (KeyError, AttributeError, IndexError, TypeError):
         try:
-            return obj[key]
-        except KeyError:
+            return getattr(obj, key)
+        except AttributeError:
             return default
     return default
 
@@ -335,17 +332,6 @@ def get_callable_name(func):
         return func.func.__name__
     else:  # Callable class
         return func.__class__.__name__
-
-
-def get_func_name(func):
-    """Given a callable, return its name. Handles `functools.partial` objects.
-
-    .. deprecated:: 1.2.0
-        Renamed to :func:`get_callable_name`.
-    """
-    warnings.warn('get_func_name was renamed to get_callable_name. get_func_name '
-                  'will be removed in version 2.0', DeprecationWarning)
-    return get_callable_name(func)
 
 
 def callable_or_raise(obj):

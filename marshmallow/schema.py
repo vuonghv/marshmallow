@@ -2,7 +2,7 @@
 """The :class:`Schema` class, including its metaclass and options (class Meta)."""
 from __future__ import absolute_import, unicode_literals
 
-from collections import defaultdict
+from collections import defaultdict, Mapping
 import copy
 import datetime as dt
 import decimal
@@ -18,7 +18,8 @@ from marshmallow import base, fields, utils, class_registry, marshalling
 from marshmallow.compat import (with_metaclass, iteritems, text_type,
                                 binary_type, OrderedDict)
 from marshmallow.orderedset import OrderedSet
-from marshmallow.decorators import PRE_DUMP, POST_DUMP, PRE_LOAD, POST_LOAD
+from marshmallow.decorators import (PRE_DUMP, POST_DUMP, PRE_LOAD, POST_LOAD,
+                                    VALIDATES, VALIDATES_SCHEMA)
 
 
 #: Return type of :meth:`Schema.dump` including serialized data and errors
@@ -203,7 +204,12 @@ class SchemaOpts(object):
         self.strict = getattr(meta, 'strict', False)
         self.dateformat = getattr(meta, 'dateformat', None)
         self.json_module = getattr(meta, 'json_module', json)
-        self.skip_missing = getattr(meta, 'skip_missing', False)
+        if hasattr(meta, 'skip_missing'):
+            warnings.warn(
+                'The skip_missing option is no longer necessary. Missing inputs passed to '
+                'Schema.dump will be excluded from the serialized output by default.',
+                UserWarning
+            )
         self.ordered = getattr(meta, 'ordered', False)
         self.index_errors = getattr(meta, 'index_errors', True)
         self.include = getattr(meta, 'include', {})
@@ -314,8 +320,6 @@ class BaseSchema(base.SchemaABC):
             storing them.
         - ``json_module``: JSON module to use for `loads` and `dumps`.
             Defaults to the ``json`` module in the stdlib.
-        - ``skip_missing``: If `True`, don't include key:value pairs in
-            serialized results if ``value`` is `None`.
         - ``ordered``: If `True`, order serialization output according to the
             order in which fields were declared. Output of `Schema.dump` will be a
             `collections.OrderedDict`.
@@ -329,7 +333,7 @@ class BaseSchema(base.SchemaABC):
         pass
 
     def __init__(self, extra=None, only=(), exclude=(), prefix='', strict=False,
-                 many=False, skip_missing=False, context=None):
+                 many=False, context=None):
         # copy declared fields from metaclass
         self.declared_fields = copy.deepcopy(self._declared_fields)
         self.many = many
@@ -337,7 +341,6 @@ class BaseSchema(base.SchemaABC):
         self.exclude = exclude
         self.prefix = prefix
         self.strict = strict or self.opts.strict
-        self.skip_missing = skip_missing or self.opts.skip_missing
         self.ordered = self.opts.ordered
         #: Dictionary mapping field_names -> :class:`Field` objects
         self.fields = self.dict_class()
@@ -416,20 +419,6 @@ class BaseSchema(base.SchemaABC):
         data, and the original object as arguments and should return the
         processed data.
 
-        Example: ::
-
-            class UserSchema(Schema):
-                name = fields.String()
-
-            @UserSchema.data_handler
-            def add_surname(schema, data, obj):
-                data['surname'] = data['name'].split()[1]
-                return data
-
-        .. note::
-
-            You can register multiple handler functions for the same schema.
-
         .. versionadded:: 0.7.0
         .. deprecated:: 2.0.0
             Use `marshmallow.post_dump` instead.
@@ -448,34 +437,14 @@ class BaseSchema(base.SchemaABC):
         deserialization. The function receives the :class:`Schema` instance and the
         input data as arguments and should return `False` if validation fails.
 
-        Example: ::
-
-            class NumberSchema(Schema):
-                field_a = fields.Integer()
-                field_b = fields.Integer()
-
-            @NumberSchema.validator
-            def validate_numbers(schema, input_data):
-                return input_data['field_b'] > input_data['field_a']
-
-        A validator may take an optional third argument which will contain the raw input
-        data. ::
-
-            @NumberSchema.validator
-            def check_unknown_fields(schema, input_data, raw_data):
-                for k in raw_data:
-                    if k not in schema.fields:
-                        raise ValidationError('Unknown field name')
-
-        .. note::
-
-            You can register multiple validators for the same schema.
-
         .. versionadded:: 1.0
-        .. versionchanged:: 2.0
-            Validators can receive an optional third argument which is the
-            raw input data.
+        .. deprecated:: 2.0.0
+            Use `marshmallow.validates_schema <marshmallow.decorators.validates_schema>` instead.
         """
+        warnings.warn(
+            'Schema.validator is deprecated. Use the marshmallow.validates_schema decorator '
+            'instead.', category=DeprecationWarning
+        )
         cls.__validators__ = cls.__validators__ or []
         cls.__validators__.append(func)
         return func
@@ -485,21 +454,6 @@ class BaseSchema(base.SchemaABC):
         """Decorator that registers a preprocessing function to be applied during
         deserialization. The function receives the :class:`Schema` instance and the
         input data as arguments and should return the modified dictionary of data.
-
-        Example: ::
-
-            class NumberSchema(Schema):
-                field_a = fields.Integer()
-                field_b = fields.Integer()
-
-            @NumberSchema.preprocessor
-            def add_to_field_a(schema, input_data):
-                input_data['field_a'] += 1
-                return input_data
-
-        .. note::
-
-            You can register multiple preprocessors for the same schema.
 
         .. versionadded:: 1.0
         .. deprecated:: 2.0.0
@@ -557,7 +511,6 @@ class BaseSchema(base.SchemaABC):
             self.fields,
             many=many,
             strict=self.strict,
-            skip_missing=self.skip_missing,
             accessor=self.__accessor__,
             dict_class=self.dict_class,
             index_errors=self.opts.index_errors,
@@ -682,6 +635,10 @@ class BaseSchema(base.SchemaABC):
             dict_class=self.dict_class,
             index_errors=self.opts.index_errors,
         )
+        self._invoke_field_validators(data=result, many=many)
+        # Run schema-level migration
+        self._invoke_validators(raw=True, data=result, original_data=data, many=many)
+        self._invoke_validators(raw=False, data=result, original_data=data, many=many)
         errors = self._unmarshal.errors
         if errors and callable(self.__error_handler__):
             self.__error_handler__(errors, data)
@@ -737,28 +694,27 @@ class BaseSchema(base.SchemaABC):
             return dictionary.
         :returns: An dict of field_name:field_obj pairs.
         """
-        # Convert obj to a dict
-        obj_marshallable = utils.to_marshallable_type(obj,
-            field_names=field_names)
-        if obj_marshallable and many:
+        if obj and many:
             try:  # Homogeneous collection
-                obj_prototype = obj_marshallable[0]
+                obj_prototype = obj[0]
             except IndexError:  # Nothing to serialize
                 return self.declared_fields
-            obj_dict = utils.to_marshallable_type(obj_prototype,
-                field_names=field_names)
-        else:
-            obj_dict = obj_marshallable
+            obj = obj_prototype
         ret = self.dict_class()
         for key in field_names:
             if key in self.declared_fields:
                 ret[key] = self.declared_fields[key]
-            else:
-                if obj_dict:
+            else:  # Implicit field creation (class Meta 'fields' or 'additional')
+                if obj:
+                    attribute_type = None
                     try:
-                        attribute_type = type(obj_dict[key])
-                    except KeyError:
-                        raise AttributeError(
+                        if isinstance(obj, Mapping):
+                            attribute_type = type(obj[key])
+                        else:
+                            attribute_type = type(getattr(obj, key))
+                    except (AttributeError, KeyError) as err:
+                        err_type = type(err)
+                        raise err_type(
                             '"{0}" is not a valid field for {1}.'.format(key, obj))
                     field_obj = self.TYPE_MAPPING.get(attribute_type, fields.Field)()
                 else:  # Object is None
@@ -781,6 +737,62 @@ class BaseSchema(base.SchemaABC):
         data = self._invoke_processors(tag_name, raw=True, data=data, many=many)
         data = self._invoke_processors(tag_name, raw=False, data=data, many=many)
         return data
+
+    def _invoke_field_validators(self, data, many):
+        for attr_name in self.__processors__[(VALIDATES, False)]:
+            validator = getattr(self, attr_name)
+            validator_kwargs = validator.__marshmallow_kwargs__[(VALIDATES, False)]
+            field_name = validator_kwargs['field_name']
+
+            try:
+                field_obj = self.fields[field_name]
+            except KeyError:
+                raise ValueError('"{0}" field does not exist.'.format(field_name))
+
+            if many:
+                for idx, item in enumerate(data):
+                    try:
+                        value = item[field_name]
+                    except KeyError:
+                        pass
+                    else:
+                        self._unmarshal.call_and_store(
+                            getter_func=validator,
+                            data=value,
+                            field_name=field_name,
+                            field_obj=field_obj,
+                            index=(idx if self.opts.index_errors else None)
+                        )
+            else:
+                try:
+                    value = data[field_name]
+                except KeyError:
+                    pass
+                else:
+                    self._unmarshal.call_and_store(
+                        getter_func=validator,
+                        data=value,
+                        field_name=field_name,
+                        field_obj=field_obj
+                    )
+
+    def _invoke_validators(self, raw, data, original_data, many):
+        for attr_name in self.__processors__[(VALIDATES_SCHEMA, raw)]:
+            validator = getattr(self, attr_name)
+            validator_kwargs = validator.__marshmallow_kwargs__[(VALIDATES_SCHEMA, raw)]
+            pass_original = validator_kwargs.get('pass_original', False)
+            if raw:
+                validator = partial(validator, many=many)
+            if many:
+                for idx, item in enumerate(data):
+                    self._unmarshal._run_validator(validator,
+                        item, original_data, self.fields, strict=self.strict, many=many,
+                        index=idx, pass_original=pass_original)
+            else:
+                self._unmarshal._run_validator(validator,
+                    data, original_data, self.fields, strict=self.strict, many=many,
+                    pass_original=pass_original)
+        return None
 
     def _invoke_processors(self, tag_name, raw, data, many):
         for attr_name in self.__processors__[(tag_name, raw)]:

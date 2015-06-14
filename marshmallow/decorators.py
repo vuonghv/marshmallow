@@ -4,11 +4,15 @@ These should be imported from the top-level `marshmallow` module.
 
 Example: ::
 
-    from marshmallow import Schema, pre_load, pre_dump, post_load
+    from marshmallow import (
+        Schema, pre_load, pre_dump, post_load, validates_schema,
+        validates, fields, ValidationError
+    )
 
     class UserSchema(Schema):
 
         email = fields.Str(required=True)
+        age = fields.Integer(required=True)
 
         @post_load
         def lowerstrip_email(self, item):
@@ -25,15 +29,51 @@ Example: ::
             namespace = 'results' if many else 'result'
             return {namespace: data}
 
+        @validates_schema
+        def validate_email(self, data):
+            if len(data['email']) < 3:
+                raise ValidationError('Email must be more than 3 characters', 'email')
+
+        @validates('age')
+        def validate_age(self, data):
+            if data < 14:
+                raise ValidationError('Too young!')
+
 .. warning::
     The invocation order of decorated methods of the same type is not guaranteed.
     If you need to guarantee order of different processing steps, you should put
     them in the same processing method.
 """
+from __future__ import unicode_literals
+
+
 PRE_DUMP = 'pre_dump'
 POST_DUMP = 'post_dump'
 PRE_LOAD = 'pre_load'
 POST_LOAD = 'post_load'
+VALIDATES = 'validates'
+VALIDATES_SCHEMA = 'validates_schema'
+
+
+def validates(field_name):
+    """Register a field validator.
+
+    :param str field_name: Name of the field that the method validates.
+    """
+    return tag_processor(VALIDATES, None, False, field_name=field_name)
+
+
+def validates_schema(fn=None, raw=False, pass_original=False):
+    """Register a schema-level validates_schema method.
+
+    By default, receives a single object at a time, regardless of whether ``many=True``
+    is passed to the `Schema`. If ``raw=True``, the raw data (which may be a collection)
+    and the value for ``many`` is passed.
+
+    If ``pass_original=True``, the original data (before unmarshalling) will be passed as
+    an additional argument to the method.
+    """
+    return tag_processor(VALIDATES_SCHEMA, fn, raw, pass_original=pass_original)
 
 
 def pre_dump(fn=None, raw=False):
@@ -90,14 +130,14 @@ class _ClassProcessorMethod(classmethod):
     pass
 
 
-def tag_processor(tag_name, fn, raw):
+def tag_processor(tag_name, fn, raw, **kwargs):
     """Tags decorated processor function to be picked up later
 
     :return: Decorated function if supplied, else this decorator with its args
         bound.
     """
     if fn is None:  # Allow decorator to be used with no arguments
-        return lambda fn_actual: tag_processor(tag_name, fn_actual, raw)
+        return lambda fn_actual: tag_processor(tag_name, fn_actual, raw, **kwargs)
 
     # Special-case rewrapping staticmethod and classmethod, because we can't
     # directly set attributes on those.
@@ -122,6 +162,13 @@ def tag_processor(tag_name, fn, raw):
         marshmallow_tags = fn.__marshmallow_tags__
     except AttributeError:
         fn.__marshmallow_tags__ = marshmallow_tags = set()
+    # Also save the kwargs for the tagged function on
+    # __marshmallow_kwargs__, keyed by (<tag_name>, <raw>)
+    try:
+        marshmallow_kwargs = fn.__marshmallow_kwargs__
+    except AttributeError:
+        fn.__marshmallow_kwargs__ = marshmallow_kwargs = {}
     marshmallow_tags.add((tag_name, raw))
+    marshmallow_kwargs[(tag_name, raw)] = kwargs
 
     return fn
