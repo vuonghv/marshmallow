@@ -56,6 +56,7 @@ class Field(FieldABC):
     """Basic field from which other fields should extend. It applies no
     formatting by default, and should only be used in cases where
     data does not need to be formatted before being serialized or deserialized.
+    On error, the name of the field will be returned.
 
     :param default: If set, this value will be used during serialization if the input value
         is missing. If not set, the field will be excluded from the serialized output if the
@@ -63,7 +64,8 @@ class Field(FieldABC):
     :param str attribute: The name of the attribute to get the value from. If
         `None`, assumes the attribute has the same name as the field.
     :param str load_from: Additional key to look for when deserializing. Will only
-        be checked if the field's name is not found on the input dictionary.
+        be checked if the field's name is not found on the input dictionary. If checked,
+        it will return this parameter on error.
     :param str error: Error message stored upon validation failure.
     :param callable validate: Validator or collection of validators that are called
         during deserialization. Validator takes a field's input value as
@@ -239,6 +241,16 @@ class Field(FieldABC):
 
     # Methods for concrete classes to override.
 
+    def _add_to_schema(self, field_name, schema):
+        """Update field with values from its parent schema. Called by
+            :meth:`__set_field_attrs <marshmallow.Schema.__set_field_attrs>`.
+
+        :param str field_name: Field name set in schema
+        :param Schema schema: Parent schema
+        """
+        self.parent = self.parent or schema
+        self.name = self.name or field_name
+
     def _serialize(self, value, attr, obj):
         """Serializes ``value`` to a basic Python datatype. Noop by default.
         Concrete :class:`Field` classes should implement this method.
@@ -400,12 +412,28 @@ class List(Field):
                                            'marshmallow.base.FieldABC')
             self.container = cls_or_instance
 
+    def get_value(self, attr, obj, accessor=None):
+        """Return the value for a given key from an object."""
+        value = super(List, self).get_value(attr, obj, accessor=accessor)
+        if self.container.attribute:
+            if utils.is_collection(value):
+                return [
+                    self.container.get_value(self.container.attribute, each)
+                    for each in value
+                ]
+            return self.container.get_value(self.container.attribute, value)
+        return value
+
+    def _add_to_schema(self, field_name, schema):
+        super(List, self)._add_to_schema(field_name, schema)
+        self.container._add_to_schema(field_name, schema)
+
     def _serialize(self, value, attr, obj):
         if value is None:
             return None
         if utils.is_collection(value):
             return [self.container._serialize(each, attr, obj) for each in value]
-        return [self.container.serialize(attr, obj)]
+        return [self.container._serialize(value, attr, obj)]
 
     def _deserialize(self, value):
         if utils.is_indexable_but_not_string(value) and not isinstance(value, dict):
@@ -710,6 +738,10 @@ class DateTime(Field):
         # or ``_desrialize`` methods This allows a Schema to dynamically set the
         # dateformat, e.g. from a Meta option
         self.dateformat = format
+
+    def _add_to_schema(self, field_name, schema):
+        super(DateTime, self)._add_to_schema(field_name, schema)
+        self.dateformat = self.dateformat or schema.opts.dateformat
 
     def _serialize(self, value, attr, obj):
         if value is None:
