@@ -37,3 +37,6 @@ Contributors (chronological)
 - Kevin Stone `@kevinastone <https://github.com/kevinastone>`_
 - Alex Morken `@alexmorken <https://github.com/alexmorken>`_
 - Sergey Polzunov `@traut <https://github.com/traut>`_
+- Kelvin Hammond `@kelvinhammond <https://github.com/kelvinhammond>`_
+- Matt Stobo `@mwstobo <https://github.com/mwstobo>`_
+- Max Orhai `@max-orhai <https://github.com/max-orhai>`_

@@ -218,7 +218,6 @@ class Unmarshaller(ErrorStore):
         :param list validators: List of validation functions to apply to the
             deserialized dictionary.
         :param list preprocess: List of pre-processing functions.
-        :param list postprocess: List of post-processing functions.
         :param bool strict: If `True`, raise errors if invalid data are passed in
             instead of failing silently and storing the errors.
         :param type dict_class: Dictionary class used to construct the output.
@@ -235,7 +234,7 @@ class Unmarshaller(ErrorStore):
             self._pending = True
             ret = [self.deserialize(d, fields_dict, many=False,
                         validators=validators, preprocess=preprocess,
-                        postprocess=postprocess, strict=strict, dict_class=dict_class,
+                        strict=strict, dict_class=dict_class,
                         index=idx, index_errors=index_errors)
                     for idx, d in enumerate(data)]
             self._pending = False
@@ -249,13 +248,20 @@ class Unmarshaller(ErrorStore):
                 key = fields_dict[attr_name].attribute or attr_name
                 try:
                     raw_value = data.get(attr_name, missing)
-                except AttributeError:
+                except AttributeError:  # Input data is not a dict
                     msg = 'Data must be a dict, got a {0}'.format(data.__class__.__name__)
-                    raise ValidationError(
-                        msg,
-                        field_names=[attr_name],
-                        fields=[field_obj]
-                    )
+                    errors = self.get_errors(index=index)
+                    if strict:
+                        raise ValidationError(
+                            msg,
+                            field_names=[SCHEMA],
+                            fields=[]
+                        )
+                    else:
+                        errors = self.get_errors()
+                        errors.setdefault(SCHEMA, []).append(msg)
+                        # Input data type is incorrect, so we can bail out early
+                        break
                 field_name = attr_name
                 if raw_value is missing and field_obj.load_from:
                     field_name = field_obj.load_from
@@ -292,10 +298,6 @@ class Unmarshaller(ErrorStore):
                 field_names=self.error_field_names,
                 fields=self.error_fields
             )
-        if postprocess:
-            postprocess = postprocess or []
-            for func in postprocess:
-                ret = func(ret)
         return ret
 
     # Make an instance callable
