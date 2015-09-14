@@ -10,7 +10,6 @@ and from primitive types.
 
 from __future__ import unicode_literals
 
-from marshmallow import utils
 from marshmallow.utils import missing
 from marshmallow.compat import text_type, iteritems
 from marshmallow.exceptions import (
@@ -71,7 +70,9 @@ class ErrorStore(object):
                 errors[field_name] = err.messages
             else:
                 errors.setdefault(field_name, []).extend(err.messages)
-            value = missing
+            # When a Nested field fails validation, the marshalled data is stored
+            # on the ValidationError's data attribute
+            value = err.data or missing
         return value
 
 class Marshaller(ErrorStore):
@@ -156,6 +157,8 @@ class Unmarshaller(ErrorStore):
     .. versionadded:: 1.0.0
     """
 
+    default_schema_validation_error = 'Invalid data.'
+
     def _run_validator(self, validator_func, output,
             original_data, fields_dict, index=None,
             strict=False, many=False, pass_original=False):
@@ -165,10 +168,7 @@ class Unmarshaller(ErrorStore):
             else:
                 res = validator_func(output)
             if res is False:
-                func_name = utils.get_callable_name(validator_func)
-                raise ValidationError('Schema validator {0}({1}) is False'.format(
-                    func_name, dict(output)
-                ))
+                raise ValidationError(self.default_schema_validation_error)
         except ValidationError as err:
             errors = self.get_errors(index=index)
             # Store or reraise errors
@@ -245,7 +245,6 @@ class Unmarshaller(ErrorStore):
             for attr_name, field_obj in iteritems(fields_dict):
                 if field_obj.dump_only:
                     continue
-                key = fields_dict[attr_name].attribute or attr_name
                 try:
                     raw_value = data.get(attr_name, missing)
                 except AttributeError:  # Input data is not a dict
@@ -271,14 +270,21 @@ class Unmarshaller(ErrorStore):
                     raw_value = _miss() if callable(_miss) else _miss
                 if raw_value is missing and not field_obj.required:
                     continue
+
+                getter = lambda val: field_obj.deserialize(
+                    val,
+                    field_obj.load_from or attr_name,
+                    data
+                )
                 value = self.call_and_store(
-                    getter_func=field_obj.deserialize,
+                    getter_func=getter,
                     data=raw_value,
                     field_name=field_name,
                     field_obj=field_obj,
                     index=(index if index_errors else None)
                 )
                 if value is not missing:
+                    key = fields_dict[attr_name].attribute or attr_name
                     items.append((key, value))
             ret = dict_class(items)
         else:

@@ -84,12 +84,12 @@ As a consequence of this new behavior, the ``skip_missing`` class Meta option ha
 Pre-processing and Post-processing Methods
 ******************************************
 
-The pre- and post-processing API was significantly improved for better consistency and flexibility. The `pre_load <marshmallow.decorators.pre_load>`, `post_load <marshmallow.decorators.post_load>`, `pre_dump <marshmallow.decorators.pre_dump>`, and `post_dump <marshmallow.decorators.post_dump>` should be used to define processing hooks. `Schema.preprocessor` and `Schema.data_handler` are deprecated.
+The pre- and post-processing API was significantly improved for better consistency and flexibility. The `pre_load <marshmallow.decorators.pre_load>`, `post_load <marshmallow.decorators.post_load>`, `pre_dump <marshmallow.decorators.pre_dump>`, and `post_dump <marshmallow.decorators.post_dump>` should be used to define processing hooks. `Schema.preprocessor` and `Schema.data_handler` are removed.
 
 
 .. code-block:: python
 
-    # 1.0 Deprecated API
+    # 1.0 API
     from marshmallow import Schema, fields
 
     class ExampleSchema(Schema):
@@ -127,11 +127,11 @@ See the :ref:`Extending Schemas <extending>` page for more information on the ``
 Schema Validators
 *****************
 
-Similar to pre-processing and post-processing methods, schema validators are now defined as methods. Decorate schema validators with `validator <marshmallow.decorators.validator>`. `Schema.validator <marshmallow.Schema.validator>` is deprecated.
+Similar to pre-processing and post-processing methods, schema validators are now defined as methods. Decorate schema validators with `validates_schema <marshmallow.decorators.validates_schema>`. `Schema.validator` is removed.
 
 .. code-block:: python
 
-    # 1.0 Deprecated API
+    # 1.0 API
     from marshmallow import Schema, fields, ValidationError
 
     class MySchema(Schema):
@@ -143,17 +143,46 @@ Similar to pre-processing and post-processing methods, schema validators are now
         if data['field_a'] < data['field_b']:
             raise ValidationError('field_a must be greater than field_b')
 
-    # 2.0 Deprecated API
-    from marshmallow import Schema, fields, validator, ValidationError
+    # 2.0 API
+    from marshmallow import Schema, fields, validates_schema, ValidationError
 
     class MySchema(Schema):
         field_a = fields.Int(required=True)
         field_b = fields.Int(required=True)
 
-        @validator
+        @validates_schema
         def validate_schema(self, data):
             if data['field_a'] < data['field_b']:
                 raise ValidationError('field_a must be greater than field_b')
+
+Custom Accessors and Error Handlers
+***********************************
+
+Custom accessors and error handlers are now defined as ``class Meta`` options. `Schema.accessor` and `Schema.error_handler` are deprecated.
+
+.. code-block:: python
+
+    from marshmallow import Schema, fields
+
+    # 1.0 Deprecated API
+    class ExampleSchema(Schema):
+        field_a = fields.Int()
+
+    @ExampleSchema.accessor
+    def get_from_dict(schema, key, obj, default=None):
+        return obj.get('_' + key, default)
+
+    @ExampleSchema.error_handler
+    def handle_errors(schema, errors, obj):
+        raise CustomError('Something bad happened')
+
+    # 2.0 API
+    class ExampleSchema(Schema):
+        field_a = fields.Int()
+
+        class Meta:
+            accessor = get_from_dict
+            error_handler = handle_errors
 
 Error Format when ``many=True``
 *******************************
@@ -193,33 +222,6 @@ Use ``ValidationError`` instead of ``MarshallingError`` and ``UnmarshallingError
 **********************************************************************************
 
 The :exc:`MarshallingError` and :exc:`UnmarshallingError` exceptions are deprecated in favor of a single :exc:`ValidationError <marshmallow.exceptions.ValidationError>`. Users who have written custom fields or are using ``strict`` mode will need to change their code accordingly.
-
-Custom Fields
--------------
-
-Custom fields should raise :exc:`ValidationError <marshmallow.exceptions.ValidationError>` in their `_deserialize` and `_serialize` methods when a validation error occurs.
-
-.. code-block:: python
-    :emphasize-lines: 17
-
-    from marshmallow import fields, ValidationError
-    from marshmallow.exceptions import UnmarshallingError
-
-    # In 1.0, an UnmarshallingError was raised
-    class PasswordField(fields.Field):
-
-        def _deserialize(self, val):
-            if not len(val) >= 6:
-                raise UnmarshallingError('Password too short.')
-            return val
-
-    # In 2.0, an ValidationError is raised
-    class PasswordField(fields.Field):
-
-        def _deserialize(self, val):
-            if not len(val) >= 6:
-                raise ValidationError('Password too short.')
-            return val
 
 Handle ``ValidationError`` in strict mode
 -----------------------------------------
@@ -266,6 +268,35 @@ In 2.0, `strict` mode was improved so that you can access all error messages for
     # }
 
 
+Custom Fields
+*************
+
+Two changes must be made to make your custom fields compatible with version 2.0.
+
+- The `_deserialize <marshmallow.fields.Field._deserialize>` method of custom fields now receives ``attr`` (the key corresponding to the value to be deserialized) and the raw input ``data`` as arguments.
+- Custom fields should raise :exc:`ValidationError <marshmallow.exceptions.ValidationError>` in their `_deserialize` and `_serialize` methods when a validation error occurs.
+
+.. code-block:: python
+
+    from marshmallow import fields, ValidationError
+    from marshmallow.exceptions import UnmarshallingError
+
+    # In 1.0, an UnmarshallingError was raised
+    class PasswordField(fields.Field):
+
+        def _deserialize(self, val):
+            if not len(val) >= 6:
+                raise UnmarshallingError('Password too short.')
+            return val
+
+    # In 2.0, _deserialize receives attr and data,
+    # and a ValidationError is raised
+    class PasswordField(fields.Field):
+
+        def _deserialize(self, val, attr, data):
+            if not len(val) >= 6:
+                raise ValidationError('Password too short.')
+            return val
 
 Use ``OneOf`` instead of ``fields.Select``
 ******************************************

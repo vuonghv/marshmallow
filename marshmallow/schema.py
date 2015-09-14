@@ -16,7 +16,7 @@ from functools import partial
 
 from marshmallow import base, fields, utils, class_registry, marshalling
 from marshmallow.compat import (with_metaclass, iteritems, text_type,
-                                binary_type, OrderedDict)
+                                binary_type, OrderedDict, plain_function)
 from marshmallow.orderedset import OrderedSet
 from marshmallow.decorators import (PRE_DUMP, POST_DUMP, PRE_LOAD, POST_LOAD,
                                     VALIDATES, VALIDATES_SCHEMA)
@@ -79,7 +79,6 @@ class SchemaMeta(type):
     names to field objects. Also sets the ``opts`` class attribute, which is
     the Schema class's ``class Meta`` options.
     """
-    FUNC_LISTS = ('__validators__', '__data_handlers__', '__preprocessors__')
 
     def __new__(mcs, name, bases, attrs):
         meta = attrs.get('Meta')
@@ -136,18 +135,7 @@ class SchemaMeta(type):
     def __init__(self, name, bases, attrs):
         super(SchemaMeta, self).__init__(name, bases, attrs)
         class_registry.register(name, self)
-        self._copy_func_attrs()
         self._resolve_processors()
-
-    def _copy_func_attrs(self):
-        """Copy non-shareable class function lists
-
-        Need to copy validators, data handlers, and preprocessors lists so they
-        are not shared among subclasses and ancestors.
-        """
-        for attr in self.FUNC_LISTS:
-            attr_copy = copy.copy(getattr(self, attr))
-            setattr(self, attr, attr_copy)
 
     def _resolve_processors(self):
         """Add in the decorated processors
@@ -215,6 +203,10 @@ class SchemaOpts(object):
         self.include = getattr(meta, 'include', {})
         self.load_only = getattr(meta, 'load_only', ())
         self.dump_only = getattr(meta, 'dump_only', ())
+        # In Py2, accessor and error_handler will be unbound functions;
+        # we need to get the plain functions
+        self.accessor = plain_function(getattr(meta, 'accessor', None))
+        self.error_handler = plain_function(getattr(meta, 'error_handler', None))
 
 
 class BaseSchema(base.SchemaABC):
@@ -257,13 +249,18 @@ class BaseSchema(base.SchemaABC):
         instead of failing silently and storing the errors.
     :param bool many: Should be set to `True` if ``obj`` is a collection
         so that the object will be serialized to a list.
-    :param bool skip_missing: If `True`, don't include key:value pairs in
-        serialized results if ``value`` is `None`.
     :param dict context: Optional context passed to :class:`fields.Method` and
         :class:`fields.Function` fields.
     :param tuple load_only: A list or tuple of fields to skip during serialization
     :param tuple dump_only: A list or tuple of fields to skip during
         deserialization, read-only fields
+
+    .. versionchanged:: 2.0.0
+        `__validators__`, `__preprocessors__`, and `__data_handlers__` are removed in favor of
+        `marshmallow.decorators.validates_schema`,
+        `marshmallow.decorators.pre_load` and `marshmallow.decorators.post_dump`.
+        `__accessor__` and `__error_handler__` are deprecated in favor of the
+        ``accessor`` and ``error_handler`` class Meta options.
     """
     TYPE_MAPPING = {
         text_type: fields.String,
@@ -284,19 +281,9 @@ class BaseSchema(base.SchemaABC):
 
     OPTIONS_CLASS = SchemaOpts
 
-    #: Custom error handler function. May be `None`.
+    #: DEPRECATED: Custom error handler function. May be `None`.
     __error_handler__ = None
-
-    #  NOTE: The below class attributes must initially be `None` so that
-    #  every subclass references a different list of functions
-
-    #: List of registered post-processing functions.
-    __data_handlers__ = None
-    #: List of registered schema-level validation functions.
-    __validators__ = None
-    #: List of registered pre-processing functions.
-    __preprocessors__ = None
-    #: Function used to get values of an object.
+    #: DEPRECATED: Function used to get values of an object.
     __accessor__ = None
 
     class Meta(object):
@@ -332,10 +319,14 @@ class BaseSchema(base.SchemaABC):
             of invalid items in a collection.
         - ``load_only``: Tuple or list of fields to exclude from serialized results.
         - ``dump_only``: Tuple or list of fields to exclude from deserialization
-
-        .. versionchanged:: 2.0.0
-            `__preprocessors__` and `__data_handlers__` are deprecated. Use
-            `marshmallow.decorators.pre_load` and `marshmallow.decorators.post_dump` instead.
+        - ``accessor``: Function which defines how to pull values from an object
+            to serialize. The function receives the :class:`Schema` instance, the
+            ``key`` of the value to get, the ``obj`` to serialize, and an optional
+            ``default`` value.
+        - ``error_handler``: Error handler function for the schema.
+            The function receives the :class:`Schema` instance, a dictionary of errors,
+            and the serialized object (if serializing data) or data dictionary (if
+            deserializing data) as arguments.
         """
         pass
 
@@ -359,6 +350,13 @@ class BaseSchema(base.SchemaABC):
         )
         #: Callable unmarshalling object
         self._unmarshal = marshalling.Unmarshaller()
+        # Accessor function takes schema as first argument
+        self._accessor = partial(self.opts.accessor, self) if self.opts.accessor else None
+        # Error handler also takes schema as first argument
+        if self.opts.error_handler:
+            self._error_handler = partial(self.opts.error_handler, self)
+        else:
+            self._error_handler = None
         self.extra = extra
         self.context = context or {}
         self._update_fields(many=many)
@@ -375,15 +373,12 @@ class BaseSchema(base.SchemaABC):
                     each.update(self.extra)
             else:
                 data.update(self.extra)
-        if self._marshal.errors and callable(self.__error_handler__):
-            self.__error_handler__(self._marshal.errors, obj)
+        if self._marshal.errors:
+            # TODO: Remove self.__error_handler__ in a later release
+            error_handler = self._error_handler or self.__error_handler__
+            if callable(error_handler):
+                error_handler(self._marshal.errors, obj)
 
-        # invoke registered callbacks
-        # NOTE: these callbacks will mutate the data
-        if self.__data_handlers__:
-            for callback in self.__data_handlers__:
-                if callable(callback):
-                    data = callback(self, data, obj)
         return data
 
     @property
@@ -417,63 +412,14 @@ class BaseSchema(base.SchemaABC):
             UserSchema().load({'email': 'bademail'})  # raises ValueError
 
         .. versionadded:: 0.7.0
+        .. deprecated:: 2.0.0
+            Set the ``error_handler`` class Meta option instead.
         """
+        warnings.warn(
+            'Schema.error_handler is deprecated. Set the error_handler class Meta option '
+            'instead.', category=DeprecationWarning
+        )
         cls.__error_handler__ = func
-        return func
-
-    @classmethod
-    def data_handler(cls, func):
-        """Decorator that registers a post-processing function.
-        The function receives the :class:`Schema` instance, the serialized
-        data, and the original object as arguments and should return the
-        processed data.
-
-        .. versionadded:: 0.7.0
-        .. deprecated:: 2.0.0
-            Use `marshmallow.post_dump` instead.
-        """
-        warnings.warn(
-            'Schema.data_handler is deprecated. Use the marshmallow.post_dump decorator '
-            'instead.', category=DeprecationWarning
-        )
-        cls.__data_handlers__ = cls.__data_handlers__ or []
-        cls.__data_handlers__.append(func)
-        return func
-
-    @classmethod
-    def validator(cls, func):
-        """Decorator that registers a schema validation function to be applied during
-        deserialization. The function receives the :class:`Schema` instance and the
-        input data as arguments and should return `False` if validation fails.
-
-        .. versionadded:: 1.0
-        .. deprecated:: 2.0.0
-            Use `marshmallow.validates_schema <marshmallow.decorators.validates_schema>` instead.
-        """
-        warnings.warn(
-            'Schema.validator is deprecated. Use the marshmallow.validates_schema decorator '
-            'instead.', category=DeprecationWarning
-        )
-        cls.__validators__ = cls.__validators__ or []
-        cls.__validators__.append(func)
-        return func
-
-    @classmethod
-    def preprocessor(cls, func):
-        """Decorator that registers a preprocessing function to be applied during
-        deserialization. The function receives the :class:`Schema` instance and the
-        input data as arguments and should return the modified dictionary of data.
-
-        .. versionadded:: 1.0
-        .. deprecated:: 2.0.0
-            Use `marshmallow.pre_load` instead.
-        """
-        warnings.warn(
-            'Schema.preprocessor is deprecated. Use the marshmallow.pre_load decorator '
-            'instead.', category=DeprecationWarning
-        )
-        cls.__preprocessors__ = cls.__preprocessors__ or []
-        cls.__preprocessors__.append(func)
         return func
 
     @classmethod
@@ -482,7 +428,14 @@ class BaseSchema(base.SchemaABC):
         to serialize. The function receives the :class:`Schema` instance, the
         ``key`` of the value to get, the ``obj`` to serialize, and an optional
         ``default`` value.
+
+        .. deprecated:: 2.0.0
+            Set the ``error_handler`` class Meta option instead.
         """
+        warnings.warn(
+            'Schema.accessor is deprecated. Set the accessor class Meta option '
+            'instead.', category=DeprecationWarning
+        )
         cls.__accessor__ = func
         return func
 
@@ -520,7 +473,8 @@ class BaseSchema(base.SchemaABC):
             self.fields,
             many=many,
             strict=self.strict,
-            accessor=self.__accessor__,
+            # TODO: Remove self.__accessor__ in a later release
+            accessor=self._accessor or self.__accessor__,
             dict_class=self.dict_class,
             index_errors=self.opts.index_errors,
             **kwargs
@@ -626,25 +580,11 @@ class BaseSchema(base.SchemaABC):
 
         data = self._invoke_load_processors(PRE_LOAD, data, many)
 
-        # Bind self as the first argument of validators and preprocessors
-        if self.__validators__:
-            validators = [partial(func, self)
-                         for func in self.__validators__]
-        else:
-            validators = []
-        if self.__preprocessors__:
-            preprocessors = [partial(func, self)
-                            for func in self.__preprocessors__]
-        else:
-            preprocessors = []
-
         result = self._unmarshal(
             data,
             self.fields,
             many=many,
             strict=self.strict,
-            validators=validators,
-            preprocess=preprocessors,
             dict_class=self.dict_class,
             index_errors=self.opts.index_errors,
         )
@@ -653,8 +593,11 @@ class BaseSchema(base.SchemaABC):
         self._invoke_validators(raw=True, data=result, original_data=data, many=many)
         self._invoke_validators(raw=False, data=result, original_data=data, many=many)
         errors = self._unmarshal.errors
-        if errors and callable(self.__error_handler__):
-            self.__error_handler__(errors, data)
+        if errors:
+            # TODO: Remove self.__error_handler__ in a later release
+            error_handler = self._error_handler or self.__error_handler__
+            if callable(error_handler):
+                error_handler(errors, data)
 
         result = self._invoke_load_processors(POST_LOAD, result, many)
 
@@ -691,8 +634,13 @@ class BaseSchema(base.SchemaABC):
         self.fields = ret
         return self.fields
 
+    def on_bind_field(self, field_name, field_obj):
+        """Hook to modify a field when it is bound to the `Schema`. No-op by default."""
+        return None
+
     def __set_field_attrs(self, fields_dict):
-        """Update fields with values from schema.
+        """Bind fields to the schema, setting any necessary attributes
+        on the fields (e.g. parent and name).
 
         Also set field load_only and dump_only values if field_name was
         specified in ``class Meta``.
@@ -703,6 +651,7 @@ class BaseSchema(base.SchemaABC):
                     field_obj.load_only = True
                 if field_name in self.dump_only:
                     field_obj.dump_only = True
+                self.on_bind_field(field_name, field_obj)
                 field_obj._add_to_schema(field_name, self)
             except TypeError:
                 # field declared as a class, not an instance

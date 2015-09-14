@@ -57,7 +57,7 @@ def test_dump_with_strict_mode_raises_error(SchemaClass):
     assert exc.field_names[0] == 'email'
 
     assert type(exc.messages) == dict
-    assert exc.messages == {'email': ['Invalid email address.']}
+    assert exc.messages == {'email': ['Not a valid email address.']}
 
 def test_dump_resets_errors():
     class MySchema(Schema):
@@ -66,10 +66,10 @@ def test_dump_resets_errors():
     schema = MySchema()
     result = schema.dump(User('Joe', email='notvalid'))
     assert len(result.errors['email']) == 1
-    assert 'Invalid email address.' in result.errors['email'][0]
+    assert 'Not a valid email address.' in result.errors['email'][0]
     result = schema.dump(User('Steve', email='__invalid'))
     assert len(result.errors['email']) == 1
-    assert 'Invalid email address.' in result.errors['email'][0]
+    assert 'Not a valid email address.' in result.errors['email'][0]
 
 def test_load_resets_errors():
     class MySchema(Schema):
@@ -78,10 +78,10 @@ def test_load_resets_errors():
     schema = MySchema()
     result = schema.load({'name': 'Joe', 'email': 'notvalid'})
     assert len(result.errors['email']) == 1
-    assert 'Invalid email address.' in result.errors['email'][0]
+    assert 'Not a valid email address.' in result.errors['email'][0]
     result = schema.load({'name': 'Joe', 'email': '__invalid'})
     assert len(result.errors['email']) == 1
-    assert 'Invalid email address.' in result.errors['email'][0]
+    assert 'Not a valid email address.' in result.errors['email'][0]
 
 def test_dump_resets_error_fields():
     class MySchema(Schema):
@@ -294,6 +294,17 @@ def test_default_many_symmetry():
     s_many.loads(s_many.dumps([u1, u2]).data)
 
 
+def test_on_bind_field_hook():
+    class MySchema(Schema):
+        foo = fields.Str()
+
+        def on_bind_field(self, field_name, field_obj):
+            field_obj.metadata['fname'] = field_name
+
+    schema = MySchema()
+    assert schema.fields['foo'].metadata['fname'] == 'foo'
+
+
 class TestValidate:
 
     def test_validate_returns_errors_dict(self):
@@ -337,7 +348,7 @@ class TestValidate:
         with pytest.raises(ValidationError) as excinfo:
             s.validate({'email': 'bad-email'})
         exc = excinfo.value
-        assert exc.messages == {'email': ['Invalid email address.']}
+        assert exc.messages == {'email': ['Not a valid email address.']}
         assert type(exc.fields[0]) == fields.Email
 
     def test_validate_required(self):
@@ -424,7 +435,7 @@ def test_stores_invalid_url_error(SchemaClass):
     user = {'name': 'Steve', 'homepage': 'www.foo.com'}
     result = SchemaClass().load(user)
     assert "homepage" in result.errors
-    expected = ['Invalid URL.']
+    expected = ['Not a valid URL.']
     assert result.errors['homepage'] == expected
 
 @pytest.mark.parametrize('SchemaClass',
@@ -438,7 +449,7 @@ def test_stored_invalid_email():
     u = {'name': 'John', 'email': 'johnexample.com'}
     s = UserSchema().load(u)
     assert "email" in s.errors
-    assert s.errors['email'][0] == 'Invalid email address.'
+    assert s.errors['email'][0] == 'Not a valid email address.'
 
 def test_integer_field():
     u = User("John", age=42.3)
@@ -575,13 +586,13 @@ def test_invalid_email():
     u = User('Joe', email='bademail')
     s = UserSchema().dump(u)
     assert 'email' in s.errors
-    assert 'Invalid email address.' in s.errors['email'][0]
+    assert 'Not a valid email address.' in s.errors['email'][0]
 
 def test_invalid_url():
     u = User('Joe', homepage='badurl')
     s = UserSchema().dump(u)
     assert 'homepage' in s.errors
-    assert 'Invalid URL.' in s.errors['homepage'][0]
+    assert 'Not a valid URL.' in s.errors['homepage'][0]
 
 def test_invalid_selection():
     u = User('Jonhy')
@@ -629,8 +640,8 @@ def test_load_errors_with_many():
     data, errors = ErrorSchema(many=True).load(data)
     assert 0 in errors
     assert 2 in errors
-    assert 'Invalid email address.' in errors[0]['email'][0]
-    assert 'Invalid email address.' in errors[2]['email'][0]
+    assert 'Not a valid email address.' in errors[0]['email'][0]
+    assert 'Not a valid email address.' in errors[2]['email'][0]
 
 def test_error_raised_if_fields_option_is_not_list():
     with pytest.raises(ValueError):
@@ -828,52 +839,62 @@ def test_serializing_none_meta():
 class CustomError(Exception):
     pass
 
+def handle_errors(schema, errors, obj):
+    raise CustomError('Something bad happened')
+
 class MySchema(Schema):
     name = fields.String()
     email = fields.Email()
     age = fields.Integer()
 
+    class Meta:
+        error_handler = handle_errors
+
 class MySchema2(Schema):
     homepage = fields.URL()
 
+    class Meta:
+        error_handler = handle_errors
+
 class TestErrorHandler:
 
-    def test_dump_with_custom_error_handler(self, user):
-        @MySchema.error_handler
-        def handle_errors(serializer, errors, obj):
-            assert isinstance(serializer, MySchema)
-            assert 'age' in errors
-            assert isinstance(obj, User)
-            raise CustomError('Something bad happened')
+    def test_error_handler_decorator_is_deprecated(self):
 
+        def deprecated():
+            class MySchema(Schema):
+                pass
+
+            @MySchema.error_handler
+            def f(*args, **kwargs):
+                pass
+
+        pytest.deprecated_call(deprecated)
+
+    def test_dump_with_custom_error_handler(self, user):
         user.age = 'notavalidage'
         with pytest.raises(CustomError):
             MySchema().dump(user)
 
     def test_load_with_custom_error_handler(self):
-        @MySchema.error_handler
-        def handle_errors(serializer, errors, data):
-            assert isinstance(serializer, MySchema)
+        def handle_errors3(serializer, errors, data):
+            assert isinstance(serializer, MySchema3)
             assert 'email' in errors
             assert isinstance(data, dict)
             raise CustomError('Something bad happened')
+
+        class MySchema3(Schema):
+            email = fields.Email()
+
+            class Meta:
+                error_handler = handle_errors3
         with pytest.raises(CustomError):
-            MySchema().load({'email': 'invalid'})
+            MySchema3().load({'email': 'invalid'})
 
     def test_validate_with_custom_error_handler(self):
-        @MySchema.error_handler
-        def handle_errors(schema, errors, data):
-            raise CustomError('Something bad happened')
-
         with pytest.raises(CustomError):
-            MySchema().validate({'email': 'invalid'})
+            MySchema().validate({'age': 'notvalid', 'email': 'invalid'})
 
     def test_multiple_serializers_with_same_error_handler(self, user):
-
-        @MySchema.error_handler
-        @MySchema2.error_handler
-        def handle_errors(serializer, errors, obj):
-            raise CustomError('Something bad happened')
         user.email = 'bademail'
         user.homepage = 'foo'
 
@@ -904,316 +925,7 @@ class TestErrorHandler:
         with pytest.raises(CustomError):
             subser.load(user)
 
-class TestSchemaValidator:
-
-    def test_validator_decorator_is_deprecated(self):
-
-        def deprecated():
-            class MySchema(Schema):
-                pass
-
-            @MySchema.validator
-            def f(*args, **kwargs):
-                pass
-
-        pytest.deprecated_call(deprecated)
-
-    def test_validator_defined_on_class(self):
-        def validate_schema(instance, input_vals):
-            assert isinstance(instance, Schema)
-            return input_vals['field_b'] > input_vals['field_a']
-
-        class ValidatingSchema(Schema):
-            __validators__ = [validate_schema]
-            field_a = fields.Field()
-            field_b = fields.Field()
-
-        schema = ValidatingSchema()
-        _, errors = schema.load({'field_a': 2, 'field_b': 1})
-        assert '_schema' in errors
-        assert len(errors['_schema']) == 1
-
-    def test_validator_that_raises_error_with_dict(self):
-        def validate_schema(instance, input_vals):
-            raise ValidationError({'code': 'Invalid schema'})
-
-        class MySchema(Schema):
-            __validators__ = [validate_schema]
-
-        schema = MySchema()
-        errors = schema.validate({})
-        assert errors['_schema'] == [{'code': 'Invalid schema'}]
-
-    def test_validator_that_raises_error_with_list(self):
-        def validate_schema(instance, input_vals):
-            raise ValidationError(['error1', 'error2'])
-
-        class MySchema(Schema):
-            __validators__ = [validate_schema]
-
-        schema = MySchema()
-        errors = schema.validate({})
-        assert errors['_schema'] == ['error1', 'error2']
-
-    def test_mixed_schema_validators(self):
-        def validate_with_list(schema, in_vals):
-            raise ValidationError(['err1'])
-
-        def validate_with_dict(schema, in_vals):
-            raise ValidationError({'code': 'err2'})
-
-        def validate_with_str(schema, in_vals):
-            raise ValidationError('err3')
-
-        class MySchema(Schema):
-            __validators__ = [
-                validate_with_list,
-                validate_with_dict,
-                validate_with_str,
-            ]
-
-        schema = MySchema()
-        errors = schema.validate({})
-        assert errors['_schema'] == [
-            'err1',
-            {'code': 'err2'},
-            'err3',
-        ]
-
-    def test_registered_validators_are_not_shared_with_ancestors(self):
-        class ParentSchema(Schema):
-            pass
-
-        class ChildSchema(ParentSchema):
-            pass
-
-        @ParentSchema.validator
-        def validate_parent(schema, in_data):
-            raise ValidationError('Parent validator called')
-
-        @ChildSchema.validator
-        def validate_child(schema, in_data):
-            assert False, 'Child validator should not be called'
-
-        parent = ParentSchema()
-        errors = parent.validate({})
-        assert 'Parent validator called' in errors['_schema']
-
-    def test_registered_validators_are_not_shared_with_children(self):
-        class ParentSchema(Schema):
-            pass
-
-        class ChildSchema(ParentSchema):
-            pass
-
-        @ParentSchema.validator
-        def validate_parent(schema, in_data):
-            assert False, 'Parent validator should not be called'
-
-        @ChildSchema.validator
-        def validate_child(schema, in_data):
-            raise ValidationError('Child validator called')
-
-        child = ChildSchema()
-        errors = child.validate({})
-        assert 'Child validator called' in errors['_schema']
-
-    def test_inheriting_then_registering_validator(self):
-        def validate_parent(schema, data):
-            raise ValidationError('Parent validator called')
-
-        class ParentSchema(Schema):
-            __validators__ = [validate_parent]
-            pass
-
-        class ChildSchema(ParentSchema):
-            pass
-
-        @ChildSchema.validator
-        def validate_child(schema, data):
-            raise ValidationError('Child validator called')
-
-        child = ChildSchema()
-        errors = child.validate({})
-        assert len(errors['_schema']) == 2
-        assert 'Parent validator called' in errors['_schema']
-        assert 'Child validator called' in errors['_schema']
-
-    def test_multiple_schema_errors_can_be_stored(self):
-        def validate_with_bool(schema, in_vals):
-            return False
-
-        def validate_with_err(schema, inv_vals):
-            raise ValidationError('Something went wrong.')
-
-        class ValidatingSchema(Schema):
-            __validators__ = [validate_with_err, validate_with_bool]
-            field_a = fields.Field()
-            field_b = fields.Field()
-
-        schema = ValidatingSchema()
-        _, errors = schema.load({'field_a': 2, 'field_b': 1})
-        assert '_schema' in errors
-        assert len(errors['_schema']) == 2
-        assert errors['_schema'][0] == 'Something went wrong.'
-
-    def test_schema_validation_error_with_stict_stores_correct_field_name(self):
-        def validate_with_bool(schema, in_vals):
-            raise ValidationError('oops')
-
-        class ValidatingSchema(Schema):
-            __validators__ = [validate_with_bool]
-            field_a = fields.Field()
-
-        schema = ValidatingSchema(strict=True)
-        with pytest.raises(ValidationError) as excinfo:
-            schema.load({'field_a': 1})
-        exc = excinfo.value
-        assert exc.fields == []
-        assert exc.field_names == ['_schema']
-        assert exc.messages == {'_schema': ['oops']}
-
-    def test_schema_validation_error_with_strict_when_field_is_specified(self):
-        def validate_with_err(schema, inv_vals):
-            raise ValidationError('Something went wrong.', 'field_a')
-
-        class ValidatingSchema(Schema):
-            __validators__ = [validate_with_err]
-            field_a = fields.Str()
-            field_b = fields.Field()
-
-        schema = ValidatingSchema(strict=True)
-        with pytest.raises(ValidationError) as excinfo:
-            schema.load({'field_a': 1})
-        exc = excinfo.value
-        assert type(exc.fields[0]) == fields.Str
-        assert exc.field_names[0] == 'field_a'
-
-    def test_schema_validation_error_stored_on_multiple_fields(self):
-        def validate_with_err(schema, inv_vals):
-            raise ValidationError('Something went wrong.', ['field_a', 'field_b'])
-
-        class ValidatingSchema(Schema):
-            __validators__ = [validate_with_err]
-            field_a = fields.Str()
-            field_b = fields.Field()
-
-        schema = ValidatingSchema()
-        result = schema.load({'field_a': 1})
-        assert 'field_a' in result.errors
-        assert 'field_b' in result.errors
-        assert result.errors['field_a'] == ['Something went wrong.']
-        assert result.errors['field_b'] == ['Something went wrong.']
-
-        schema = ValidatingSchema(strict=True)
-        with pytest.raises(ValidationError) as excinfo:
-            schema.load({'field_a': 1})
-        err = excinfo.value
-        assert type(err.fields[0]) == fields.Str
-        assert type(err.fields[1]) == fields.Field
-        assert err.field_names == ['field_a', 'field_b']
-        assert err.messages == {
-            'field_a': ['Something went wrong.'],
-            'field_b': ['Something went wrong.']
-        }
-
-    def test_validator_with_strict(self):
-        def validate_schema(instance, input_vals):
-            assert isinstance(instance, Schema)
-            return input_vals['field_b'] > input_vals['field_a']
-
-        class ValidatingSchema(Schema):
-            __validators__ = [validate_schema]
-            field_a = fields.Field()
-            field_b = fields.Field()
-
-        schema = ValidatingSchema(strict=True)
-        in_data = {'field_a': 2, 'field_b': 1}
-        with pytest.raises(ValidationError) as excinfo:
-            schema.load(in_data)
-        assert 'Schema validator' in str(excinfo)
-        assert 'is False' in str(excinfo)
-
-        # underlying exception is a ValidationError
-        exc = excinfo.value
-        assert isinstance(exc, ValidationError)
-
-    def test_validator_defined_by_decorator(self):
-        class ValidatingSchema(Schema):
-            field_a = fields.Field()
-            field_b = fields.Field()
-
-        @ValidatingSchema.validator
-        def validate_schema(instance, input_vals):
-            assert isinstance(instance, Schema)
-            return input_vals['field_b'] > input_vals['field_a']
-
-        schema = ValidatingSchema()
-        _, errors = schema.load({'field_a': 2, 'field_b': 1})
-        assert '_schema' in errors
-
-    def test_validators_are_inherited(self):
-        def validate_schema(instance, input_vals):
-            return input_vals['field_b'] > input_vals['field_a']
-
-        class ValidatingSchema(Schema):
-            __validators__ = [validate_schema]
-            field_a = fields.Field()
-            field_b = fields.Field()
-
-        class ValidatingSchemaChild(ValidatingSchema):
-            pass
-
-        schema = ValidatingSchema()
-        _, errors = schema.load({'field_a': 2, 'field_b': 1})
-        assert '_schema' in errors
-
-    def test_uncaught_validation_errors_are_stored(self):
-        def validate_schema(schema, input_vals):
-            raise ValidationError('Something went wrong')
-
-        class MySchema(Schema):
-            __validators__ = [validate_schema]
-
-        schema = MySchema()
-        _, errors = schema.load({'foo': 42})
-        assert errors['_schema'] == ['Something went wrong']
-
-    def test_validation_error_with_error_parameter(self):
-        def validate_schema(schema, input_vals):
-            raise ValidationError('Something went wrong')
-
-        class MySchema(Schema):
-            __validators__ = [validate_schema]
-            foo = fields.String(error="This message isn't used")
-
-        schema = MySchema()
-        _, errors = schema.load({'foo': 42})
-        assert errors['_schema'] == ['Something went wrong']
-
-    def test_store_schema_validation_errors_on_specified_field(self):
-        def validate_schema(schema, input_vals):
-            raise ValidationError('Something went wrong with field bar', 'bar')
-
-        class MySchema(Schema):
-            __validators__ = [validate_schema]
-            foo = fields.String()
-            bar = fields.Field()
-
-        schema = MySchema()
-        _, errors = schema.load({'bar': 42, 'foo': 123})
-        assert '_schema' not in errors
-        assert 'Something went wrong with field bar' in errors['bar']
-
-    def test_errors_are_cleared_on_load(self):
-        class MySchema(Schema):
-            foo = fields.Str(validate=lambda x: False)
-
-        schema = MySchema()
-        _, errors = schema.load({'foo': 'bar'})
-        assert len(errors['foo']) == 1
-        _, errors2 = schema.load({'foo': 'bar'})
-        assert len(errors2['foo']) == 1
+class TestFieldValidation:
 
     def test_errors_are_cleared_after_loading_collection(self):
         class MySchema(Schema):
@@ -1252,236 +964,6 @@ class TestSchemaValidator:
         errors = s.validate({'foo': 42})
         assert errors['foo'] == [{'code': 'invalid_foo'}]
 
-    # https://github.com/marshmallow-code/marshmallow/issues/144
-    def test_nested_schema_validators(self):
-
-        class ThirdLevel(Schema):
-            name = fields.String()
-
-        class SecondLevel(Schema):
-            third = fields.Nested(ThirdLevel)
-
-        @SecondLevel.validator
-        def validate_third(schema, in_data):
-            raise ValidationError('from second level', 'third')
-
-        class FirstLevel(Schema):
-            second = fields.Nested(SecondLevel)
-
-        @FirstLevel.validator
-        def validate_second(schema, in_data):
-            raise ValidationError('from first level', 'second')
-
-        schema = FirstLevel()
-
-        bad_data = {'second': {'third': {}}}
-        _, errors = schema.load(bad_data)
-        expected = {
-            'second': {
-                'third': ['from second level'],
-                '_schema': ['from first level'],
-            }
-        }
-        assert errors == expected
-
-
-class TestPreprocessors:
-
-    def test_preprocessor_decorator_is_deprecated(self):
-
-        def deprecated():
-            class MySchema(Schema):
-                pass
-
-            @MySchema.preprocessor
-            def f(*args, **kwargs):
-                pass
-
-        pytest.deprecated_call(deprecated)
-
-    def test_preprocessors_defined_on_class(self):
-        def preprocess_data(schema, in_vals):
-            assert isinstance(schema, Schema)
-            in_vals['field_a'] += 1
-            return in_vals
-
-        class PreprocessingSchema(Schema):
-            __preprocessors__ = [preprocess_data]
-            field_a = fields.Integer()
-
-        schema = PreprocessingSchema()
-        result, errors = schema.load({'field_a': 10})
-        assert result['field_a'] == 11
-
-    def test_registered_preprocessors_are_not_shared_with_ancestors(self):
-        class ParentSchema(Schema):
-            foo = fields.Field()
-
-        class ChildSchema(ParentSchema):
-            pass
-
-        @ParentSchema.preprocessor
-        def parent_preprocessor(schema, data):
-            data['sentinel'] = True
-            return data
-
-        @ChildSchema.preprocessor
-        def child_preprocessor(schema, data):
-            assert False, 'Child preprocessor should not be called'
-
-        parent = ParentSchema()
-        result = parent.load({})
-        assert result.data['sentinel'] is True
-
-    def test_registered_preprocessors_are_not_shared_with_children(self):
-        class ParentSchema(Schema):
-            pass
-
-        class ChildSchema(ParentSchema):
-            pass
-
-        @ParentSchema.preprocessor
-        def parent_preprocessor(schema, data):
-            assert False, 'Parent preprocessor should not be called'
-
-        @ChildSchema.preprocessor
-        def child_preprocessor(schema, data):
-            data['sentinel'] = True
-            return data
-
-        child = ChildSchema()
-        result = child.load({})
-        assert result.data['sentinel'] is True
-
-    def test_preprocessors_defined_by_decorator(self):
-
-        class PreprocessingSchema(Schema):
-            field_a = fields.Integer()
-
-        @PreprocessingSchema.preprocessor
-        def preprocess_data(schema, in_vals):
-            in_vals['field_a'] += 1
-            return in_vals
-
-        schema = PreprocessingSchema()
-        result, errors = schema.load({'field_a': 10})
-        assert result['field_a'] == 11
-
-
-class TestDataHandler:
-
-    def test_data_handler_is_deprecated(self):
-
-        def deprecated():
-            class MySchema(Schema):
-                pass
-
-            @MySchema.data_handler
-            def f(*args, **kwargs):
-                pass
-
-        pytest.deprecated_call(deprecated)
-
-    def test_schema_with_custom_data_handler(self, user):
-        class CallbackSchema(Schema):
-            name = fields.String()
-
-        @CallbackSchema.data_handler
-        def add_meaning(serializer, data, obj):
-            data['meaning'] = 42
-            return data
-
-        ser = CallbackSchema()
-        data, _ = ser.dump(user)
-        assert data['meaning'] == 42
-
-    def test_registered_data_handlers_are_not_shared_with_ancestors(self):
-        class ParentSchema(Schema):
-            foo = fields.Field()
-
-        class ChildSchema(ParentSchema):
-            pass
-
-        @ParentSchema.data_handler
-        def parent_handler(schema, data, obj):
-            data['sentinel'] = True
-            return data
-
-        @ChildSchema.data_handler
-        def child_handler(schema, data, obj):
-            assert False, 'Child data handler should not be called'
-
-        parent = ParentSchema()
-        result = parent.dump({'foo': 42})
-        assert result.data['sentinel'] is True
-
-    def test_registered_data_handlers_are_not_shared_with_children(self):
-        class ParentSchema(Schema):
-            pass
-
-        class ChildSchema(ParentSchema):
-            pass
-
-        @ParentSchema.data_handler
-        def parent_handler(schema, data, obj):
-            assert False, 'Parent data handler should not be called'
-
-        @ChildSchema.data_handler
-        def child_handler(schema, data, obj):
-            data['sentinel'] = True
-            return data
-
-        child = ChildSchema()
-        assert child.dump({}).data['sentinel'] is True
-
-    def test_serializer_with_multiple_data_handlers(self, user):
-        class CallbackSchema2(Schema):
-            name = fields.String()
-
-        @CallbackSchema2.data_handler
-        def add_meaning(serializer, data, obj):
-            data['meaning'] = 42
-            return data
-
-        @CallbackSchema2.data_handler
-        def upper_name(serializer, data, obj):
-            data['name'] = data['name'].upper()
-            return data
-
-        ser = CallbackSchema2()
-        data, _ = ser.dump(user)
-        assert data['meaning'] == 42
-        assert data['name'] == user.name.upper()
-
-    def test_setting_data_handlers_class_attribute(self, user):
-        def add_meaning(serializer, data, obj):
-            data['meaning'] = 42
-            return data
-
-        class CallbackSchema3(Schema):
-            __data_handlers__ = [add_meaning]
-
-            name = fields.String()
-
-        ser = CallbackSchema3()
-        data, _ = ser.dump(user)
-        assert data['meaning'] == 42
-
-    def test_root_data_handler(self, user):
-        class RootSchema(Schema):
-            NAME = 'user'
-
-            name = fields.String()
-
-        @RootSchema.data_handler
-        def add_root(serializer, data, obj):
-            return {
-                serializer.NAME: data
-            }
-
-        s = RootSchema()
-        data, _ = s.dump(user)
-        assert data['user']['name'] == user.name
 
 def test_schema_repr():
     class MySchema(Schema):
@@ -1629,7 +1111,7 @@ class TestNestedSchema:
         )
         assert "email" in errors['user']
         assert len(errors['user']['email']) == 1
-        assert "Invalid email address." in errors['user']['email'][0]
+        assert 'Not a valid email address.' in errors['user']['email'][0]
         # No problems with collaborators
         assert "collaborators" not in errors
 
@@ -2008,11 +1490,26 @@ def get_from_dict(schema, key, obj, default=None):
 
 class TestAccessor:
 
+    def test_accessor_decorator_is_deprecated(self):
+
+        def deprecated():
+            class MySchema(Schema):
+                pass
+
+            @MySchema.accessor
+            def f(*args, **kwargs):
+                pass
+
+        pytest.deprecated_call(deprecated)
+
     def test_accessor_is_used(self):
         class UserDictSchema(Schema):
-            __accessor__ = get_from_dict
             name = fields.Str()
             email = fields.Email()
+
+            class Meta:
+                accessor = get_from_dict
+
         user_dict = {'_name': 'joe', '_email': 'joe@shmoe.com'}
         schema = UserDictSchema()
         result = schema.dump(user_dict)
@@ -2026,9 +1523,11 @@ class TestAccessor:
 
     def test_accessor_with_many(self):
         class UserDictSchema(Schema):
-            __accessor__ = get_from_dict
             name = fields.Str()
             email = fields.Email()
+
+            class Meta:
+                accessor = get_from_dict
 
         user_dicts = [{'_name': 'joe', '_email': 'joe@shmoe.com'},
                       {'_name': 'jane', '_email': 'jane@shmane.com'}]
@@ -2044,24 +1543,6 @@ class TestAccessor:
         with pytest.raises(AttributeError):
             schema.dump(users)
 
-    def test_accessor_decorator(self):
-        class UserDictSchema(Schema):
-            name = fields.Str()
-            email = fields.Email()
-
-        @UserDictSchema.accessor
-        def get_from_dict2(schema, key, obj, default=None):
-            return obj.get('_' + key, default)
-        user_dict = {'_name': 'joe', '_email': 'joe@shmoe.com'}
-        schema = UserDictSchema()
-        result = schema.dump(user_dict)
-        assert result.data['name'] == user_dict['_name']
-        assert result.data['email'] == user_dict['_email']
-        assert not result.errors
-        # can't serialize User object
-        user = User(name='joe', email='joe@shmoe.com')
-        with pytest.raises(AttributeError):
-            schema.dump(user)
 
 class TestRequiredFields:
 

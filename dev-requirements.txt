@@ -9,9 +9,10 @@ pytz
 wheel
 
 # Testing
-pytest>=2.6.3
+# Need development version of pytest for py35 compat
+# https://github.com/pytest-dev/pytest/issues/744
+git+https://github.com/pytest-dev/pytest.git
 tox>=1.5.0
 
 # Syntax checking
-flake8==2.4.0
-pep8>=1.5.7,<1.6
+flake8==2.4.1

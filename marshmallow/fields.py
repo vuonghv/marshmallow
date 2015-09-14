@@ -171,13 +171,10 @@ class Field(FieldABC):
         """
         errors = []
         for validator in self.validators:
-            func_name = utils.get_callable_name(validator)
-            msg = 'Validator {0}({1}) is False'.format(
-                func_name, value
-            )
             try:
                 if validator(value) is False:
-                    raise ValidationError(getattr(self, 'error', None) or msg)
+                    default_message = 'Invalid value.'
+                    raise ValidationError(getattr(self, 'error', None) or default_message)
             except ValidationError as err:
                 if isinstance(err.messages, dict):
                     errors.append(err.messages)
@@ -224,7 +221,7 @@ class Field(FieldABC):
             value = None
         return self._serialize(value, attr, obj)
 
-    def deserialize(self, value):
+    def deserialize(self, value, attr=None, data=None):
         """Deserialize ``value``.
 
         :raise ValidationError: If an invalid value is passed or if a required value
@@ -235,7 +232,7 @@ class Field(FieldABC):
         self._validate_missing(value)
         if getattr(self, 'allow_none', False) is True and value is None:
             return None
-        output = self._deserialize(value)
+        output = self._deserialize(value, attr, data)
         self._validate(output)
         return output
 
@@ -245,8 +242,8 @@ class Field(FieldABC):
         """Update field with values from its parent schema. Called by
             :meth:`__set_field_attrs <marshmallow.Schema.__set_field_attrs>`.
 
-        :param str field_name: Field name set in schema
-        :param Schema schema: Parent schema
+        :param str field_name: Field name set in schema.
+        :param Schema schema: Parent schema.
         """
         self.parent = self.parent or schema
         self.name = self.name or field_name
@@ -267,13 +264,21 @@ class Field(FieldABC):
         :param str attr: The attribute or key on the object to be serialized.
         :param object obj: The object the value was pulled from.
         :raise ValidationError: In case of formatting or validation failure.
+        :return: The serialized value
         """
         return value
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
         """Deserialize value. Concrete :class:`Field` classes should implement this method.
 
+        :param value: The value to be deserialized.
+        :param str attr: The attribute/key in `data` to be deserialized.
+        :param dict data: The raw input data passed to the `Schema.load`.
         :raise ValidationError: In case of formatting or validation failure.
+        :return: The deserialized value.
+
+        .. versionchanged:: 2.0.0
+            Added ``attr`` and ``data`` parameters.
         """
         return value
 
@@ -378,14 +383,14 @@ class Nested(Field):
                 return ret[self.only]
         return ret
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
         if self.many and not utils.is_collection(value):
             raise ValidationError(
                 'Expected a collection of dicts, got a {0}.'.format(value.__class__.__name__))
 
         data, errors = self.schema.load(value)
         if errors:
-            raise ValidationError(errors)
+            raise ValidationError(errors, data=data)
         return data
 
     def _validate_missing(self, value):
@@ -477,7 +482,7 @@ class List(Field):
             return [self.container._serialize(each, attr, obj) for each in value]
         return [self.container._serialize(value, attr, obj)]
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
         if utils.is_indexable_but_not_string(value) and not isinstance(value, dict):
             # Convert all instances in typed list to container type
             return [self.container.deserialize(each) for each in value]
@@ -500,7 +505,10 @@ class String(Field):
             return None
         return utils.ensure_text_type(value)
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
+        if not isinstance(value, basestring):
+            msg = 'Not a valid string.'
+            raise ValidationError(getattr(self, 'error', None) or msg)
         result = utils.ensure_text_type(value)
         return result
 
@@ -508,9 +516,10 @@ class String(Field):
 class UUID(String):
     """A UUID field."""
 
-    def _deserialize(self, value):
-        msg = 'Could not deserialize {0!r} to a UUID object.'.format(value)
-        err = ValidationError(getattr(self, 'error', None) or msg)
+    default_error = 'Not a valid UUID.'
+
+    def _deserialize(self, value, attr, data):
+        err = ValidationError(getattr(self, 'error', None) or self.default_error)
         try:
             return uuid.UUID(value)
         except (ValueError, AttributeError):
@@ -525,6 +534,7 @@ class Number(Field):
     """
 
     num_type = float
+    default_error = 'Not a valid number.'
 
     def __init__(self, as_string=False, **kwargs):
         self.as_string = as_string
@@ -541,7 +551,7 @@ class Number(Field):
         try:
             return self._format_num(value)
         except (TypeError, ValueError) as err:
-            raise ValidationError(getattr(self, 'error', None) or text_type(err))
+            raise ValidationError(getattr(self, 'error', None) or self.default_error)
 
     def serialize(self, attr, obj, accessor=None):
         """Pulls the value for the given key from the object and returns the
@@ -555,7 +565,7 @@ class Number(Field):
     def _serialize(self, value, attr, obj):
         return self._validated(value)
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
         return self._validated(value)
 
 
@@ -566,6 +576,7 @@ class Integer(Number):
     """
 
     num_type = int
+    default_error = 'Not a valid integer.'
 
 
 class Decimal(Number):
@@ -630,7 +641,7 @@ class Decimal(Number):
             return super(Decimal, self)._validated(value)
         except decimal.InvalidOperation:
             raise ValidationError(
-                getattr(self, 'error', None) or 'Invalid decimal value.'
+                getattr(self, 'error', None) or self.default_error
             )
 
 
@@ -639,38 +650,36 @@ class Boolean(Field):
 
     :param kwargs: The same keyword arguments that :class:`Field` receives.
     """
-
-    #: Values that will deserialize to `True`. If an empty set, any non-falsy
+    #: Values that will (de)serialize to `True`. If an empty set, any non-falsy
     #  value will deserialize to `True`.
-    truthy = set()
-    #: Values that will deserialize to `False`.
-    falsy = set(['False', 'false', '0', 'null', 'None'])
+    truthy = set(('t', 'T', 'true', 'True', 'TRUE', '1', 1, True))
+    #: Values that will (de)serialize to `False`.
+    falsy = set(('f', 'F', 'false', 'False', 'FALSE', '0', 0, 0.0, False))
 
     def _serialize(self, value, attr, obj):
         if value is None:
             return None
+        elif value in self.truthy:
+            return True
+        elif value in self.falsy:
+            return False
+
         return bool(value)
 
-    def _deserialize(self, value):
-        if not value:
-            return False
-        try:
-            value_str = text_type(value)
-        except TypeError as error:
-            msg = getattr(self, 'error', None) or text_type(error)
-            raise ValidationError(msg)
-        if value_str in self.falsy:
-            return False
-        elif self.truthy:
-            if value_str in self.truthy:
-                return True
-            else:
-                default_message = '{0!r} is not in {1} nor {2}'.format(
-                    value_str, self.truthy, self.falsy
-                )
-                msg = getattr(self, 'error', None) or default_message
-                raise ValidationError(msg)
-        return True
+    def _deserialize(self, value, attr, data):
+        if not self.truthy:
+            return bool(value)
+        else:
+            try:
+                if value in self.truthy:
+                    return True
+                elif value in self.falsy:
+                    return False
+            except TypeError:
+                pass
+        raise ValidationError(
+            getattr(self, 'error', None) or 'Not a valid boolean.'
+        )
 
 class FormattedString(Field):
     """Interpolate other values from the object into this field. The syntax for
@@ -741,7 +750,7 @@ class Arbitrary(Number):
     def _serialize(self, value, attr, obj):
         return self._validated(value)
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
         return self._validated(value)
 
 
@@ -773,6 +782,7 @@ class DateTime(Field):
     DEFAULT_FORMAT = 'iso'
 
     localtime = False
+    default_error = 'Not a valid datetime.'
 
     def __init__(self, format=None, **kwargs):
         super(DateTime, self).__init__(**kwargs)
@@ -798,9 +808,8 @@ class DateTime(Field):
         else:
             return value.strftime(self.dateformat)
 
-    def _deserialize(self, value):
-        msg = 'Could not deserialize {0!r} to a datetime object.'.format(value)
-        err = ValidationError(getattr(self, 'error', None) or msg)
+    def _deserialize(self, value, attr, data):
+        err = ValidationError(getattr(self, 'error', None) or self.default_error)
         if not value:  # Falsy values, e.g. '', None, [] are not valid
             raise err
         self.dateformat = self.dateformat or self.DEFAULT_FORMAT
@@ -808,6 +817,11 @@ class DateTime(Field):
         if func:
             try:
                 return func(value)
+            except (TypeError, AttributeError, ValueError):
+                raise err
+        elif self.dateformat:
+            try:
+                return dt.datetime.strptime(value, self.dateformat)
             except (TypeError, AttributeError, ValueError):
                 raise err
         elif utils.dateutil_available:
@@ -836,6 +850,7 @@ class Time(Field):
 
     :param kwargs: The same keyword arguments that :class:`Field` receives.
     """
+    default_error = 'Not a valid time.'
 
     def _serialize(self, value, attr, obj):
         if value is None:
@@ -849,10 +864,9 @@ class Time(Field):
             return ret[:12]
         return ret
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
         """Deserialize an ISO8601-formatted time to a :class:`datetime.time` object."""
-        msg = 'Could not deserialize {0!r} to a time object.'.format(value)
-        err = ValidationError(getattr(self, 'error', None) or msg)
+        err = ValidationError(getattr(self, 'error', None) or self.default_error)
         if not value:   # falsy values are invalid
             raise err
         try:
@@ -865,6 +879,7 @@ class Date(Field):
 
     :param kwargs: The same keyword arguments that :class:`Field` receives.
     """
+    default_error = 'Not a valid date.'
 
     def _serialize(self, value, attr, obj):
         if value is None:
@@ -876,12 +891,11 @@ class Date(Field):
             raise ValidationError(getattr(self, 'error', None) or msg)
         return value
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
         """Deserialize an ISO8601-formatted date string to a
         :class:`datetime.date` object.
         """
-        msg = 'Could not deserialize {0!r} to a date object.'.format(value)
-        err = ValidationError(getattr(self, 'error', None) or msg)
+        err = ValidationError(getattr(self, 'error', None) or self.default_error)
         if not value:  # falsy values are invalid
             raise err
         try:
@@ -908,6 +922,8 @@ class TimeDelta(Field):
     DAYS = 'days'
     SECONDS = 'seconds'
     MICROSECONDS = 'microseconds'
+
+    default_error = 'Not a valid period of time.'
 
     def __init__(self, precision='seconds', error=None, **kwargs):
         precision = precision.lower()
@@ -937,20 +953,18 @@ class TimeDelta(Field):
             msg = '{0!r} cannot be formatted as a timedelta.'.format(value)
             raise ValidationError(getattr(self, 'error', None) or msg)
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
         try:
             value = int(value)
         except (TypeError, ValueError):
-            msg = '{0!r} cannot be interpreted as a valid period of time.'.format(value)
-            raise ValidationError(getattr(self, 'error', None) or msg)
+            raise ValidationError(getattr(self, 'error', None) or self.default_error)
 
         kwargs = {self.precision: value}
 
         try:
             return dt.timedelta(**kwargs)
         except OverflowError:
-            msg = '{0!r} cannot be interpreted as a valid period of time.'.format(value)
-            raise ValidationError(getattr(self, 'error', None) or msg)
+            raise ValidationError(getattr(self, 'error', None) or self.default_error)
 
 
 class Fixed(Number):
@@ -1092,7 +1106,7 @@ class Method(Field):
             pass
         return missing_
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
         if self.deserialize_method_name:
             try:
                 method = utils.callable_or_raise(
@@ -1137,7 +1151,7 @@ class Function(Field):
             pass
         return missing_
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
         if self.deserialize_func:
             return self.deserialize_func(value)
         return value
@@ -1172,7 +1186,7 @@ class Select(Field):
     def _serialize(self, value, attr, obj):
         return self._validated(value)
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
         return self._validated(value)
 
 
@@ -1187,6 +1201,11 @@ class QuerySelect(Field):
         keygetter = 'id'
         field = fields.QuerySelect(query, keygetter)
 
+    .. warning::
+        Be careful when using this with queries that return large result sets.
+        The (de)serialization of this field has an algorithmic complexity of O(N),
+        where N is the number of query results.
+
     :param callable query: The query which will be executed at each
         (de)serialization to find the list of valid objects and keys.
     :param keygetter: Can be a callable or a string. In the former case, it must
@@ -1197,8 +1216,13 @@ class QuerySelect(Field):
     :param kwargs: The same keyword arguments that :class:`Field` receives.
 
     .. versionadded:: 1.2.0
+    .. deprecated:: 2.0.0
     """
     def __init__(self, query, keygetter, **kwargs):
+        warnings.warn(
+            'The QuerySelect field is deprecated.',
+            category=DeprecationWarning
+        )
         self.query = query
         self.keygetter = keygetter if callable(keygetter) else attrgetter(keygetter)
         super(QuerySelect, self).__init__(**kwargs)
@@ -1240,7 +1264,7 @@ class QuerySelect(Field):
         error = getattr(self, 'error', None) or 'Invalid object.'
         raise ValidationError(error)
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
         for key, result in self.pairs():
             if key == value:
                 return result
@@ -1256,13 +1280,27 @@ class QuerySelectList(QuerySelect):
     query, this will result in a validation error. This field
     is ORM-agnostic.
 
+    .. warning::
+        Be careful when using this with queries that return large result sets.
+        The (de)serialization of this field has an algorithmic complexity of O(N*M),
+        where N is the number of query results and M is the length of the list to
+        (de)serialize.
+
     :param callable query: Same as :class:`QuerySelect`.
     :param keygetter: Same as :class:`QuerySelect`.
     :param str error: Error message stored upon validation failure.
     :param kwargs: The same keyword arguments that :class:`Field` receives.
 
     .. versionadded:: 1.2.0
+    .. deprecated:: 2.0.0
     """
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            'The QuerySelectList field is deprecated.',
+            category=DeprecationWarning
+        )
+        super(QuerySelectList, self).__init__(*args, **kwargs)
+
     def _serialize(self, value, attr, obj):
         items = [self.keygetter(v) for v in value]
 
@@ -1280,7 +1318,7 @@ class QuerySelectList(QuerySelect):
 
         return items
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
         if not value:
             return []
 
@@ -1318,7 +1356,7 @@ class Constant(Field):
     def _serialize(self, value, *args, **kwargs):
         return self.constant
 
-    def _deserialize(self, value):
+    def _deserialize(self, value, attr, data):
         return self.constant
 
 

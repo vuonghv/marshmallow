@@ -150,8 +150,7 @@ Handling Errors
 
 By default, :meth:`Schema.dump` and :meth:`Schema.load` will return validation errors as a dictionary (unless ``strict`` mode is enabled).
 
-You can register a custom error-handling function for a :class:`Schema` using the :meth:`Schema.error_handler` decorator. The function receives the schema instance, the errors dictionary, and the original object to be serialized.
-
+You can specify a custom error-handling function for a :class:`Schema` with the ``error_handler`` option. The function receives the schema instance, the errors dictionary, and the original object (or input data if deserializing) to be (de)serialized.
 
 .. code-block:: python
 
@@ -161,15 +160,16 @@ You can register a custom error-handling function for a :class:`Schema` using th
     class AppError(Exception):
         pass
 
+    def handle_errors(schema, errors, obj):
+        """Log and raise our custom exception when (de)serialization fails."""
+        logging.error(errors)
+        raise AppError('An error occurred with input: {0}'.format(obj))
+
     class UserSchema(Schema):
         email = fields.Email()
 
-    # Log and raise our custom exception when serialization
-    # or deserialization fails
-    @UserSchema.error_handler
-    def handle_errors(schema, errors, obj):
-        logging.error(errors)
-        raise AppError('An error occurred while serializing {0}'.format(obj))
+        class Meta:
+            error_handler = handle_errors
 
     invalid = User('Foo Bar', email='invalid-email')
     schema = UserSchema()
@@ -184,6 +184,7 @@ Schema-level Validation
 You can register schema-level validation functions for a :class:`Schema` using the :meth:`marshmallow.validates_schema <marshmallow.decorators.validates_schema>` decorator. Schema-level validation errors will be stored on the ``_schema`` key of the errors dictonary.
 
 .. code-block:: python
+    :emphasize-lines: 7
 
     from marshmallow import Schema, fields, validates_schema, ValidationError
 
@@ -253,32 +254,21 @@ Overriding how attributes are accessed
 
 By default, marshmallow uses the `utils.get_value` function to pull attributes from various types of objects for serialization. This will work for *most* use cases.
 
-However, if you want to specify how values are accessed from an object, you can use the :meth:`Schema.accessor` decorator.
+However, if you want to specify how values are accessed from an object, you can specify the :meth:`accessor` option.
 
 .. code-block:: python
+
+    # If we know we're only serializing dictionaries, we can
+    # override the accessor function
+    def get_from_dict(schema, key, obj, default=None):
+        return obj.get(key, default)
 
     class UserDictSchema(Schema):
         name = fields.Str()
         email = fields.Email()
 
-    # If we know we're only serializing dictionaries, we can
-    # override the accessor function
-    @UserDictSchema.accessor
-    def get_from_dict(schema, key, obj, default=None):
-        return obj.get(key, default)
-
-
-Handler Functions as Class Members
-----------------------------------
-
-You can register a Schema's error handler, validators, and accessor as optional class members. This might be useful for defining an abstract `Schema` class.
-
-.. code-block:: python
-
-    class BaseSchema(Schema):
-        __error_handler__ = handle_errors  # A function
-        __validators__ = [validate_schema]  # List of functions
-        __accessor__ = get_from_dict  # A function
+        class Meta:
+            accessor = get_from_dict
 
 
 Custom "class Meta" Options
@@ -362,3 +352,15 @@ Our application schemas can now inherit from our custom schema class.
     result = ser.dump(user)
     result.data  # {"user": {"name": "Keith", "email": "keith@stones.com"}}
 
+Using Context
+-------------
+
+The ``context`` attribute of a `Schema` is a general-purpose store for extra information that may be needed for (de)serialization. It may be used in both ``Schema`` and ``Field`` methods.
+
+.. code-block:: python
+
+    schema = UserSchema()
+    # Make current HTTP request available to
+    # custom fields, schema methods, schema validators, etc.
+    schema.context['request'] = request
+    schema.dump(user)

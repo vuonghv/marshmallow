@@ -40,3 +40,6 @@ Contributors (chronological)
 - Kelvin Hammond `@kelvinhammond <https://github.com/kelvinhammond>`_
 - Matt Stobo `@mwstobo <https://github.com/mwstobo>`_
 - Max Orhai `@max-orhai <https://github.com/max-orhai>`_
+- Praveen `@praveen-p <https://github.com/praveen-p>`_
+- Stas Sușcov `@stas <https://github.com/stas>`_
+- Florian `@floqqi <https://github.com/floqqi>`_
