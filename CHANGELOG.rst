@@ -1,6 +1,23 @@
 Changelog
 ---------
 
+2.0.0rc2 (2015-09-16)
++++++++++++++++++++++
+
+Deprecation/Removals:
+
+- ``make_object`` is deprecated. Use a ``post_load`` method instead (:issue:`277`). **This method will be removed in the final 2.0 release**.
+
+Bug fixes:
+
+- Allow non-field names to be passed to ``ValidationError`` (:issue:`273`). Thanks :user:`evgeny-sureev` for the catch and patch.
+
+Changes from 2.0.0rc1:
+
+- The ``raw`` parameter of the ``pre_*``, ``post_*``, ``validates_schema`` decorators was renamed to ``pass_many`` (:issue:`276`).
+- Add ``pass_original`` parameter to ``post_load`` and ``post_dump`` (:issue:`216`).
+- Methods decorated with the ``pre_*``, ``post_*``, and ``validates_*`` decorators must be instance methods. Class methods and instance methods are not supported at this time.
+
 2.0.0rc1 (2015-09-13)
 +++++++++++++++++++++
 
@@ -8,7 +25,7 @@ Features:
 
 - *Backwards-incompatible*: ``fields.Field._deserialize`` now takes ``attr`` and ``data`` as arguments (:issue:`172`). Thanks :user:`alexmic` and :user:`kevinastone` for the suggestion.
 - Allow a ``Field's`` ``attribute`` to be modified during deserialization (:issue:`266`). Thanks :user:`floqqi`.
-- Allow partially-valid data to be return for ``Nested`` fields (:issue:`269`). Thanks :user:`jomag` for the suggestion.
+- Allow partially-valid data to be returned for ``Nested`` fields (:issue:`269`). Thanks :user:`jomag` for the suggestion.
 - Add ``Schema.on_bind_field`` hook which allows a ``Schema`` to modify its fields when they are bound.
 - Stricter validation of string, boolean, and number fields (:issue:`231`). Thanks :user:`touilleMan` for the suggestion.
 - Improve consistency of error messages.
