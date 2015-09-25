@@ -300,10 +300,24 @@ class TestFieldSerialization:
         with pytest.raises(ValueError):
             BadSerializer().dump(u)
 
-    def test_datetime_deserializes_to_iso_by_default(self, user):
+    def test_datetime_serializes_to_iso_by_default(self, user):
         field = fields.DateTime()  # No format specified
         expected = utils.isoformat(user.created, localtime=False)
-        assert field.serialize("created", user) == expected
+        assert field.serialize('created', user) == expected
+
+    @pytest.mark.parametrize('value',
+    [
+        'invalid',
+        [],
+        24,
+    ])
+    def test_datetime_invalid_serialization(self, value, user):
+        field = fields.DateTime()
+        user.created = value
+
+        with pytest.raises(ValidationError) as excinfo:
+            field.serialize('created', user)
+        assert excinfo.value.args[0] == '"{0}" cannot be formatted as a datetime.'.format(value)
 
     @pytest.mark.parametrize('fmt', ['rfc', 'rfc822'])
     def test_datetime_field_rfc822(self, fmt, user):
@@ -357,12 +371,42 @@ class TestFieldSerialization:
         user.time_registered = None
         assert field.serialize('time_registered', user) is None
 
+    @pytest.mark.parametrize('in_data',
+    [
+        'badvalue',
+        '',
+        [],
+        42,
+    ])
+    def test_invalid_time_field_serialization(self, in_data, user):
+        field = fields.Time()
+        user.time_registered = in_data
+        with pytest.raises(ValidationError) as excinfo:
+            field.serialize('time_registered', user)
+        msg = '"{0}" cannot be formatted as a time.'.format(in_data)
+        assert excinfo.value.args[0] == msg
+
     def test_date_field(self, user):
         field = fields.Date()
         assert field.serialize('birthdate', user) == user.birthdate.isoformat()
 
         user.birthdate = None
         assert field.serialize('birthdate', user) is None
+
+    @pytest.mark.parametrize('in_data',
+    [
+        'badvalue',
+        '',
+        [],
+        42,
+    ])
+    def test_invalid_date_field_serialization(self, in_data, user):
+        field = fields.Date()
+        user.birthdate = in_data
+        with pytest.raises(ValidationError) as excinfo:
+            field.serialize('birthdate', user)
+        msg = '"{0}" cannot be formatted as a date.'.format(in_data)
+        assert excinfo.value.args[0] == msg
 
     def test_timedelta_field(self, user):
         user.d1 = dt.timedelta(days=1, seconds=1, microseconds=1)
@@ -408,13 +452,6 @@ class TestFieldSerialization:
 
         user.d6 = None
         assert field.serialize('d6', user) is None
-
-    def test_select_field(self, user):
-        field = fields.Select(['male', 'female', 'transexual', 'asexual'])
-        assert field.serialize("sex", user) == "male"
-        invalid = User('foo', sex='alien')
-        with pytest.raises(ValidationError):
-            field.serialize('sex', invalid)
 
     def test_datetime_list_field(self):
         obj = DateTimeList([dt.datetime.utcnow(), dt.datetime.now()])
@@ -527,45 +564,6 @@ class TestFieldSerialization:
                 'of marshmallow.base.FieldABC')
         assert expected_msg in str(excinfo)
 
-    def test_arbitrary_field(self, user):
-        field = fields.Arbitrary()
-        user.age = 12.3
-        result = field.serialize('age', user)
-        assert result == text_type(utils.float_to_decimal(user.age))
-
-    def test_arbitrary_field_invalid_value(self, user):
-        field = fields.Arbitrary()
-        with pytest.raises(ValidationError):
-            user.age = 'invalidvalue'
-            field.serialize('age', user)
-
-    def test_fixed_field(self, user):
-        field = fields.Fixed(3)
-        user.age = 42
-        result = field.serialize('age', user)
-        assert result == '42.000'
-
-    def test_fixed_field_none(self, user):
-        field = fields.Fixed()
-        user.age = None
-        assert field.serialize('age', user) is None
-
-    def test_fixed_field_invalid_value(self, user):
-        field = fields.Fixed()
-        with pytest.raises(ValidationError):
-            user.age = 'invalidvalue'
-            field.serialize('age', user)
-
-    def test_price_field(self, user):
-        field = fields.Price()
-        user.balance = 100
-        assert field.serialize('balance', user) == '100.00'
-
-    def test_price_field_none(self, user):
-        field = fields.Price()
-        user.balance = None
-        assert field.serialize('balance', user) is None
-
     def test_serialize_does_not_apply_validators(self, user):
         field = fields.Field(validate=lambda x: False)
         # No validation error raised
@@ -646,9 +644,7 @@ class TestFieldSerialization:
 
     @pytest.mark.parametrize('FieldClass', ALL_FIELDS)
     def test_all_fields_serialize_none_to_none(self, FieldClass):
-        if FieldClass == fields.Enum:
-            field = FieldClass(['bar', 'baz', None])
-        elif FieldClass == fields.FormattedString:
+        if FieldClass == fields.FormattedString:
             field = FieldClass('{foo}', allow_none=True)
         else:
             field = FieldClass(allow_none=True)

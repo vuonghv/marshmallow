@@ -5,9 +5,9 @@ import decimal
 
 import pytest
 
-from marshmallow import fields, utils, Schema, validates
+from marshmallow import fields, utils, Schema, validate
 from marshmallow.exceptions import ValidationError
-from marshmallow.compat import text_type, basestring
+from marshmallow.compat import basestring
 
 from tests.base import (
     assert_almost_equal,
@@ -26,8 +26,6 @@ class TestDeserializingNone:
     def test_fields_allow_none_deserialize_to_none(self, FieldClass):
         if FieldClass == fields.FormattedString:
             field = FieldClass(src_str='foo', allow_none=True)
-        elif FieldClass == fields.Enum:
-            field = FieldClass(choices=['foo', 'bar'], allow_none=True)
         else:
             field = FieldClass(allow_none=True)
         field.deserialize(None) is None
@@ -38,8 +36,6 @@ class TestDeserializingNone:
         # by default, allow_none=False
         if FieldClass == fields.FormattedString:
             field = FieldClass(src_str='foo')
-        elif FieldClass == fields.Enum:
-            field = FieldClass(choices=['foo', 'bar'])
         else:
             field = FieldClass()
         with pytest.raises(ValidationError) as excinfo:
@@ -102,6 +98,7 @@ class TestFieldDeserialization:
         assert excinfo.value.args[0] == 'Not a valid number.'
         with pytest.raises(ValidationError) as excinfo:
             field.deserialize(m5)
+        assert excinfo.value.args[0] == 'Not a valid number.'
 
     def test_decimal_field_with_places(self):
         m1 = 12
@@ -286,15 +283,10 @@ class TestFieldDeserialization:
             field.deserialize(in_val)
         expected_msg = 'Not a valid boolean.'
         assert str(excinfo.value.args[0]) == expected_msg
-        field2 = MyBoolean(error='bad input')
+        field2 = MyBoolean(error_messages={'invalid': 'bad input'})
         with pytest.raises(ValidationError) as excinfo:
             field2.deserialize(in_val)
         assert str(excinfo.value.args[0]) == 'bad input'
-
-    def test_arbitrary_field_deserialization(self):
-        field = fields.Arbitrary()
-        expected = text_type(utils.float_to_decimal(float(42)))
-        assert field.deserialize('42') == expected
 
     @pytest.mark.parametrize('in_value',
     [
@@ -378,19 +370,7 @@ class TestFieldDeserialization:
         field = fields.Time()
         with pytest.raises(ValidationError) as excinfo:
             field.deserialize(in_data)
-        msg = 'Not a valid time.'
-        assert msg in str(excinfo)
-
-    def test_fixed_field_deserialization(self):
-        field = fields.Fixed(decimals=3)
-        assert field.deserialize('12.3456') == '12.346'
-        field.deserialize('12.3456') == '12.346'
-        assert field.deserialize(12.3456) == '12.346'
-
-    def test_fixed_field_deserialize_invalid_value(self):
-        field = fields.Fixed(decimals=3)
-        with pytest.raises(ValidationError):
-            field.deserialize('badvalue')
+        assert excinfo.value.args[0] == 'Not a valid time.'
 
     def test_timedelta_field_deserialization(self):
         field = fields.TimeDelta()
@@ -414,14 +394,14 @@ class TestFieldDeserialization:
         assert result.microseconds == 0
 
         field = fields.TimeDelta(fields.TimeDelta.MICROSECONDS)
-        result = field.deserialize(10**6 + 1)
+        result = field.deserialize(10 ** 6 + 1)
         assert isinstance(result, dt.timedelta)
         assert result.days == 0
         assert result.seconds == 1
         assert result.microseconds == 1
 
         field = fields.TimeDelta(fields.TimeDelta.MICROSECONDS)
-        result = field.deserialize(86400 * 10**6 + 1)
+        result = field.deserialize(86400 * 10 ** 6 + 1)
         assert isinstance(result, dt.timedelta)
         assert result.days == 1
         assert result.seconds == 0
@@ -467,10 +447,6 @@ class TestFieldDeserialization:
             field.deserialize(in_value)
         msg = 'Not a valid date.'
         assert excinfo.value.args[0] == msg
-
-    def test_price_field_deserialization(self):
-        field = fields.Price()
-        assert field.deserialize('12.345') == '12.35'
 
     def test_url_field_deserialization(self):
         field = fields.Url()
@@ -561,12 +537,6 @@ class TestFieldDeserialization:
         with pytest.raises(ValueError):
             s.fields['uppername'].deserialize('STEVE')
 
-    def test_enum_field_deserialization(self):
-        field = fields.Enum(['red', 'blue'])
-        assert field.deserialize('red') == 'red'
-        with pytest.raises(ValidationError):
-            field.deserialize('notvalid')
-
     def test_query_select_field_func_key_deserialization(self):
         query = lambda: [DummyModel(ch) for ch in 'abc']
 
@@ -631,13 +601,6 @@ class TestFieldDeserialization:
         with pytest.raises(ValidationError):
             field.deserialize(['a', 'b', 'b'])
 
-    def test_fixed_list_field_deserialization(self):
-        field = fields.List(fields.Fixed(3))
-        nums = (1, 2, 3)
-        assert field.deserialize(nums) == ['1.000', '2.000', '3.000']
-        with pytest.raises(ValidationError):
-            field.deserialize((1, 2, 'invalid'))
-
     def test_datetime_list_field_deserialization(self):
         dtimes = dt.datetime.now(), dt.datetime.now(), dt.datetime.utcnow()
         dstrings = [each.isoformat() for each in dtimes]
@@ -647,17 +610,28 @@ class TestFieldDeserialization:
         for actual, expected in zip(result, dtimes):
             assert_date_equal(actual, expected)
 
-    def test_list_field_deserialize_single_value(self):
+    def test_list_field_deserialize_invalid_item(self):
         field = fields.List(fields.DateTime)
-        dtime = dt.datetime.utcnow()
-        result = field.deserialize(dtime.isoformat())
-        assert type(result) == list
-        assert_datetime_equal(result[0], dtime)
+        with pytest.raises(ValidationError) as excinfo:
+            field.deserialize(['badvalue'])
+        assert excinfo.value.args[0] == 'Not a valid datetime.'
 
-    def test_list_field_deserialize_invalid_value(self):
-        field = fields.List(fields.DateTime)
-        with pytest.raises(ValidationError):
-            field.deserialize('badvalue')
+        field = fields.List(fields.Str())
+        with pytest.raises(ValidationError) as excinfo:
+            field.deserialize(['good', 42])
+        assert excinfo.value.args[0] == 'Not a valid string.'
+
+    @pytest.mark.parametrize('value',
+    [
+        'notalist',
+        42,
+        {},
+    ])
+    def test_list_field_deserialize_value_that_is_not_a_list(self, value):
+        field = fields.List(fields.Str())
+        with pytest.raises(ValidationError) as excinfo:
+            field.deserialize(value)
+        assert excinfo.value.args[0] == 'Not a valid list.'
 
     def test_constant_field_deserialization(self):
         field = fields.Constant('something')
@@ -728,7 +702,8 @@ class TestFieldDeserialization:
             assert 'Invalid value.' in str(excinfo)
 
     def test_field_deserialization_with_custom_error_message(self):
-        field = fields.String(validate=lambda s: s.lower() == 'valid', error='Bad value.')
+        field = fields.String(validate=lambda s: s.lower() == 'valid',
+                error_messages={'validator_failed': 'Bad value.'})
         with pytest.raises(ValidationError) as excinfo:
             field.deserialize('invalid')
         assert 'Bad value.' in str(excinfo)
@@ -740,12 +715,12 @@ class SimpleUserSchema(Schema):
 
 class Validator(Schema):
     email = fields.Email()
-    colors = fields.Enum(['red', 'blue'])
+    colors = fields.Str(validate=validate.OneOf(['red', 'blue']))
     age = fields.Integer(validate=lambda n: n > 0)
 
 class Validators(Schema):
     email = fields.Email()
-    colors = fields.Enum(['red', 'blue'])
+    colors = fields.Str(validate=validate.OneOf(['red', 'blue']))
     age = fields.Integer(validate=[lambda n: n > 0, lambda n: n < 100])
 
 class TestSchemaDeserialization:
@@ -771,67 +746,6 @@ class TestSchemaDeserialization:
         assert isinstance(result, list)
         user = result[0]
         assert user['age'] == int(users_data[0]['age'])
-
-    def test_make_object(self):
-        class SimpleUserSchema2(Schema):
-            name = fields.String()
-            age = fields.Float()
-
-            def make_object(self, data):
-                return User(**data)
-        user_dict = {'name': 'Monty', 'age': '42.3'}
-        result, errors = SimpleUserSchema2().load(user_dict)
-        assert isinstance(result, User)
-        assert result.name == 'Monty'
-        assert_almost_equal(result.age, 42.3)
-
-    # https://github.com/marshmallow-code/marshmallow/issues/243
-    def test_make_object_not_called_if_data_are_invalid(self):
-        class MySchema(Schema):
-            email = fields.Email()
-
-            def make_object(self, data):
-                assert False, 'make_object should not have been called'
-        result, errors = MySchema().load({'email': 'invalid'})
-        assert 'email' in errors
-
-    # Regression test for https://github.com/marshmallow-code/marshmallow/issues/253
-    def test_validators_run_before_make_object(self):
-        class UserSchema(Schema):
-            name = fields.String()
-
-            @validates('name')
-            def validate_name(self, value):
-                if len(value) < 3:
-                    raise ValidationError('Name too short')
-
-            def make_object(self, data):
-                return User(**data)
-
-        user_dict = {'name': 'foo'}
-        result, errors = UserSchema().load(user_dict)
-        assert isinstance(result, User)
-        assert result.name == 'foo'
-
-        invalid = {'name': 'fo'}
-        result, errors = UserSchema().load(invalid)
-        assert errors['name'][0] == 'Name too short'
-
-    def test_make_object_many(self):
-        class SimpleUserSchema3(Schema):
-            name = fields.String()
-            age = fields.Float()
-
-            def make_object(self, data):
-                return User(**data)
-
-        users_data = [
-            {'name': 'Mick', 'age': '914'},
-            {'name': 'Keith', 'age': '8442'}
-        ]
-        result, errors = SimpleUserSchema3(many=True).load(users_data)
-        assert len(result) == len(users_data)
-        assert all([isinstance(each, User) for each in result])
 
     def test_exclude(self):
         schema = SimpleUserSchema(exclude=('age', ))
@@ -871,6 +785,54 @@ class TestSchemaDeserialization:
         author = result['authors'][0]
         assert author['name'] == 'Mick'
         assert author['age'] == 914
+
+    def test_nested_single_none_not_allowed(self):
+        class PetSchema(Schema):
+            name = fields.Str()
+
+        class OwnerSchema(Schema):
+            pet = fields.Nested(PetSchema(), allow_none=False)
+
+        sch = OwnerSchema()
+        errors = sch.validate({'pet': None})
+        assert 'pet' in errors
+        assert errors['pet'] == ['Field may not be null.']
+
+    def test_nested_many_non_not_allowed(self):
+        class PetSchema(Schema):
+            name = fields.Str()
+
+        class StoreSchema(Schema):
+            pets = fields.Nested(PetSchema(), allow_none=False, many=True)
+
+        sch = StoreSchema()
+        errors = sch.validate({'pets': None})
+        assert 'pets' in errors
+        assert errors['pets'] == ['Field may not be null.']
+
+    def test_nested_single_required_missing(self):
+        class PetSchema(Schema):
+            name = fields.Str()
+
+        class OwnerSchema(Schema):
+            pet = fields.Nested(PetSchema(), required=True)
+
+        sch = OwnerSchema()
+        errors = sch.validate({})
+        assert 'pet' in errors
+        assert errors['pet'] == ['Missing data for required field.']
+
+    def test_nested_many_required_missing(self):
+        class PetSchema(Schema):
+            name = fields.Str()
+
+        class StoreSchema(Schema):
+            pets = fields.Nested(PetSchema(), required=True, many=True)
+
+        sch = StoreSchema()
+        errors = sch.validate({})
+        assert 'pets' in errors
+        assert errors['pets'] == ['Missing data for required field.']
 
     def test_none_deserialization(self):
         result, errors = SimpleUserSchema().load(None)
@@ -1106,7 +1068,6 @@ class TestSchemaDeserialization:
         assert len(errors['foo']) == 1
         assert 'Missing data for required field.' in errors['foo']
 
-
 validators_gen = (func for func in [lambda x: x <= 24, lambda x: 18 <= x])
 
 validators_gen_float = (func for func in
@@ -1206,7 +1167,7 @@ class TestValidation:
         assert data == {'w': 90, 'n': {'x': 90, 'z': 180}}
 
 
-FIELDS_TO_TEST = [f for f in ALL_FIELDS if f not in [fields.Enum, fields.FormattedString]]
+FIELDS_TO_TEST = [f for f in ALL_FIELDS if f not in [fields.FormattedString]]
 @pytest.mark.parametrize('FieldClass', FIELDS_TO_TEST)
 def test_required_field_failure(FieldClass):  # noqa
     class RequireSchema(Schema):
@@ -1215,16 +1176,6 @@ def test_required_field_failure(FieldClass):  # noqa
     data, errs = RequireSchema().load(user_data)
     assert "Missing data for required field." in errs['age']
     assert data == {}
-
-
-def test_required_enum():
-    class ColorSchema(Schema):
-        color = fields.Enum(['red', 'white', 'blue'], required=True)
-    in_data = {'name': 'Phil'}
-    data, errs = ColorSchema().load(in_data)
-    assert "Missing data for required field." in errs['color']
-    assert data == {}
-
 
 @pytest.mark.parametrize('message', ['My custom required message',
                                      {'error': 'something', 'code': 400},
@@ -1246,7 +1197,7 @@ def test_deserialize_doesnt_raise_exception_if_strict_is_false_and_input_type_is
         bar = fields.Field()
     data, errs = MySchema().load([])
     assert '_schema' in errs
-    assert errs['_schema'] == ['Data must be a dict, got a list']
+    assert errs['_schema'] == ['Invalid input type.']
 
 
 def test_deserialize_raises_exception_if_strict_is_true_and_input_type_is_incorrect():
@@ -1255,7 +1206,7 @@ def test_deserialize_raises_exception_if_strict_is_true_and_input_type_is_incorr
         bar = fields.Field()
     with pytest.raises(ValidationError) as excinfo:
         MySchema(strict=True).load([])
-    assert 'Data must be a dict, got a list' in str(excinfo)
+    assert 'Invalid input type.' in str(excinfo)
     exc = excinfo.value
     assert exc.field_names == ['_schema']
     assert exc.fields == []

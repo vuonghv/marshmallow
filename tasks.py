@@ -9,22 +9,25 @@ docs_dir = 'docs'
 build_dir = os.path.join(docs_dir, '_build')
 
 @task
-def test():
-    """Run the tests."""
+def test(watch=False, last_failing=False):
+    """Run the tests.
+
+    Note: --watch requires pytest-xdist to be installed.
+    """
+    import pytest
     flake()
-    run('python setup.py test', echo=True)
+    args = []
+    if watch:
+        args.append('-f')
+    if last_failing:
+        args.append('--lf')
+    retcode = pytest.main(args)
+    sys.exit(retcode)
 
 @task
 def flake():
     """Run flake8 on codebase."""
     run('flake8 .', echo=True)
-
-@task
-def watch():
-    """Run tests when a file changes. Requires pytest-xdist."""
-    import pytest
-    errcode = pytest.main(['-f'])
-    sys.exit(errcode)
 
 @task
 def clean():
@@ -65,7 +68,8 @@ def watch_docs():
         print('    pip install sphinx-autobuild')
         sys.exit(1)
     docs()
-    run('sphinx-autobuild {} {}'.format(docs_dir, build_dir), pty=True)
+    run('sphinx-autobuild {0} {1} --watch {2}'.format(
+        docs_dir, build_dir, 'marshmallow'), echo=True, pty=True)
 
 @task
 def readme(browse=False):

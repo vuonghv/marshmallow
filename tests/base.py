@@ -3,9 +3,11 @@
 import datetime as dt
 import uuid
 
+import simplejson
+
 import pytz
 
-from marshmallow import Schema, fields
+from marshmallow import Schema, fields, post_load, validate
 from marshmallow.compat import text_type
 from marshmallow.exceptions import ValidationError
 
@@ -23,12 +25,10 @@ ALL_FIELDS = [
     fields.Time,
     fields.Date,
     fields.TimeDelta,
-    fields.Fixed,
     fields.Url,
     fields.Email,
     fields.FormattedString,
     fields.UUID,
-    fields.Enum,
     fields.Decimal,
 ]
 
@@ -142,11 +142,11 @@ class UserSchema(Schema):
     updated = fields.DateTime()
     updated_local = fields.LocalDateTime(attribute="updated")
     species = fields.String(attribute="SPECIES")
-    id = fields.String(default="no-id")
+    id = fields.String(default='no-id')
     uppername = Uppercased(attribute='name')
     homepage = fields.Url()
     email = fields.Email()
-    balance = fields.Price()
+    balance = fields.Decimal()
     is_old = fields.Method("get_is_old")
     lowername = fields.Function(lambda obj: obj.name.lower())
     registered = fields.Boolean()
@@ -157,7 +157,10 @@ class UserSchema(Schema):
     time_registered = fields.Time()
     birthdate = fields.Date()
     since_created = fields.TimeDelta()
-    sex = fields.Select(['male', 'female'])
+    sex = fields.Str(validate=validate.OneOf(['male', 'female']))
+
+    class Meta:
+        json_module = simplejson
 
     def get_is_old(self, obj):
         try:
@@ -165,14 +168,15 @@ class UserSchema(Schema):
         except TypeError as te:
             raise ValidationError(text_type(te))
 
-    def make_object(self, data):
+    @post_load
+    def make_user(self, data):
         return User(**data)
 
 
 class UserMetaSchema(Schema):
     """The equivalent of the UserSchema, using the ``fields`` option."""
     uppername = Uppercased(attribute='name')
-    balance = fields.Price()
+    balance = fields.Decimal()
     is_old = fields.Method("get_is_old")
     lowername = fields.Function(lambda obj: obj.name.lower())
     updated_local = fields.LocalDateTime(attribute="updated")
@@ -210,16 +214,8 @@ class UserIntSchema(UserSchema):
     age = fields.Integer()
 
 
-class UserFixedSchema(UserSchema):
-    age = fields.Fixed(decimals=2)
-
-
 class UserFloatStringSchema(UserSchema):
     age = fields.Float(as_string=True)
-
-
-class UserDecimalSchema(UserSchema):
-    age = fields.Arbitrary()
 
 
 class ExtendedUserSchema(UserSchema):

@@ -1,15 +1,12 @@
 # -*- coding: utf-8 -*-
 import pytest
 
-from marshmallow import fields, Schema
+from marshmallow import fields, Schema, ValidationError
 from marshmallow.marshalling import missing
 
 from tests.base import ALL_FIELDS, User
 
 class TestFieldAliases:
-
-    def test_enum_is_select(self):
-        assert fields.Enum is fields.Select
 
     def test_int_is_integer(self):
         assert fields.Int is fields.Integer
@@ -29,10 +26,12 @@ class TestField:
         default = u'œ∑´'
         field = fields.Field(default=default, attribute=None)
         assert repr(field) == (u'<fields.Field(default={0!r}, attribute=None, '
-                                'error=None, validate=None, required=False, '
+                                'validate=None, required=False, '
                                 'load_only=False, dump_only=False, '
-                                'missing={missing}, allow_none=False)>'
-                                .format(default, missing=missing))
+                                'missing={missing}, allow_none=False, '
+                                'error_messages={error_messages})>'
+                                .format(default, missing=missing,
+                                        error_messages=field.error_messages))
         int_field = fields.Integer(validate=lambda x: True)
         assert '<fields.Integer' in repr(int_field)
 
@@ -71,7 +70,7 @@ class TestMetadata:
 
     FIELDS_TO_TEST = [
         field for field in ALL_FIELDS
-        if field not in [fields.Enum, fields.FormattedString]
+        if field not in [fields.FormattedString]
     ]
 
     @pytest.mark.parametrize('FieldClass', FIELDS_TO_TEST)
@@ -86,6 +85,44 @@ class TestMetadata:
         field = fields.FormattedString('hello {name}', description='a greeting')
         assert field.metadata == {'description': 'a greeting'}
 
-    def test_metadata_may_be_added_to_enum_field(self):
-        field = fields.Enum(['red', 'blue'], description='A color')
-        assert field.metadata == {'description': 'A color'}
+
+class TestErrorMessages:
+
+    class MyField(fields.Field):
+        default_error_messages = {
+            'custom': 'Custom error message.'
+        }
+
+    def test_default_error_messages_get_merged_with_parent_error_messages(self):
+        field = self.MyField()
+        assert field.error_messages['custom'] == 'Custom error message'
+        assert 'required' in field.error_messages
+
+    def test_default_error_messages_get_merged_with_parent_error_messages(self):
+        field = self.MyField(error_messages={'passed': 'Passed error message'})
+        assert field.error_messages['passed'] == 'Passed error message'
+
+    def test_fail(self):
+        field = self.MyField()
+
+        with pytest.raises(ValidationError) as excinfo:
+            field.fail('required')
+        assert excinfo.value.args[0] == 'Missing data for required field.'
+
+        with pytest.raises(ValidationError) as excinfo:
+            field.fail('null')
+        assert excinfo.value.args[0] == 'Field may not be null.'
+
+        with pytest.raises(ValidationError) as excinfo:
+            field.fail('custom')
+        assert excinfo.value.args[0] == 'Custom error message.'
+
+        with pytest.raises(ValidationError) as excinfo:
+            field.fail('validator_failed')
+        assert excinfo.value.args[0] == 'Invalid value.'
+
+        with pytest.raises(AssertionError) as excinfo:
+            field.fail('doesntexist')
+
+        assert 'doesntexist' in excinfo.value.args[0]
+        assert 'MyField' in excinfo.value.args[0]

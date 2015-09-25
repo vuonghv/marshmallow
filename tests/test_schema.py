@@ -1,15 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import json
+import simplejson as json
+import decimal
 import random
 from collections import namedtuple
 
 import pytest
 
-from marshmallow import Schema, fields, utils, MarshalResult, UnmarshalResult
+from marshmallow import Schema, fields, utils, MarshalResult, UnmarshalResult, validates, validates_schema
 from marshmallow.exceptions import ValidationError
-from marshmallow.compat import unicode, OrderedDict
+from marshmallow.compat import OrderedDict
 
 from tests.base import *  # noqa
 
@@ -457,25 +458,11 @@ def test_integer_field():
     assert type(serialized.data['age']) == int
     assert serialized.data['age'] == 42
 
-def test_fixed_field():
-    u = User("John", age=42.3)
-    serialized = UserFixedSchema().dump(u)
-    assert serialized.data['age'] == "42.30"
-
 def test_as_string():
     u = User("John", age=42.3)
     serialized = UserFloatStringSchema().dump(u)
     assert type(serialized.data['age']) == str
     assert_almost_equal(float(serialized.data['age']), 42.3)
-
-def test_decimal_field():
-    u = User("John", age=42.3)
-    s = UserDecimalSchema().dump(u)
-    assert type(s.data['age']) == unicode
-    assert_almost_equal(float(s.data['age']), 42.3)
-
-def test_price_field(serialized_user):
-    assert serialized_user.data['balance'] == "100.00"
 
 def test_extra():
     user = User("Joe", email="joe@foo.com")
@@ -575,12 +562,12 @@ def test_can_serialize_time(user, serialized_user):
 def test_invalid_time():
     u = User('Joe', time_registered='foo')
     s = UserSchema().dump(u)
-    assert "'foo' cannot be formatted as a time." in s.errors['time_registered']
+    assert '"foo" cannot be formatted as a time.' in s.errors['time_registered']
 
 def test_invalid_date():
     u = User("Joe", birthdate='foo')
     s = UserSchema().dump(u)
-    assert "'foo' cannot be formatted as a date." in s.errors['birthdate']
+    assert '"foo" cannot be formatted as a date.' in s.errors['birthdate']
 
 def test_invalid_email():
     u = User('Joe', email='bademail')
@@ -593,12 +580,6 @@ def test_invalid_url():
     s = UserSchema().dump(u)
     assert 'homepage' in s.errors
     assert 'Not a valid URL.' in s.errors['homepage'][0]
-
-def test_invalid_selection():
-    u = User('Jonhy')
-    u.sex = 'hybrid'
-    s = UserSchema().dump(u)
-    assert "'hybrid' is not a valid choice for this field." in s.errors['sex']
 
 def test_custom_json():
     class UserJSONSchema(Schema):
@@ -615,9 +596,9 @@ def test_custom_json():
 
 def test_custom_error_message():
     class ErrorSchema(Schema):
-        email = fields.Email(error="Invalid email")
-        homepage = fields.Url(error="Bad homepage.")
-        balance = fields.Fixed(error="Bad balance.")
+        email = fields.Email(error_messages={'invalid': 'Invalid email'})
+        homepage = fields.Url(error_messages={'invalid': 'Bad homepage.'})
+        balance = fields.Decimal(error_messages={'invalid': 'Bad balance.'})
 
     u = {'email': 'joe.net', 'homepage': 'joe@example.com', 'balance': 'blah'}
     s = ErrorSchema()
@@ -673,6 +654,15 @@ def test_only_and_exclude():
     assert 'bar' not in result.data
 
 
+def test_exclude_invalid_attribute():
+
+    class MySchema(Schema):
+        foo = fields.Field()
+
+    sch = MySchema(exclude=('bar', ))
+    assert sch.dump({'foo': 42}).data == {'foo': 42}
+
+
 def test_only_with_invalid_attribute():
     class MySchema(Schema):
         foo = fields.Field()
@@ -681,6 +671,15 @@ def test_only_with_invalid_attribute():
     with pytest.raises(KeyError) as excinfo:
         sch.dump(dict(foo=42))
     assert '"bar" is not a valid field' in str(excinfo.value.args[0])
+
+def test_only_bounded_by_fields():
+    class MySchema(Schema):
+
+        class Meta:
+            fields = ('foo', )
+
+    sch = MySchema(only=('baz', ))
+    assert sch.dump({'foo': 42}).data == {}
 
 
 def test_nested_only_and_exclude():
@@ -717,14 +716,15 @@ def test_nested_with_sets():
 def test_meta_serializer_fields():
     u = User("John", age=42.3, email="john@example.com",
              homepage="http://john.com")
-    s = UserMetaSchema().dump(u)
-    assert s.data['name'] == u.name
-    assert s.data['balance'] == "100.00"
-    assert s.data['uppername'] == "JOHN"
-    assert s.data['is_old'] is False
-    assert s.data['created'] == utils.isoformat(u.created)
-    assert s.data['updated_local'] == utils.isoformat(u.updated, localtime=True)
-    assert s.data['finger_count'] == 10
+    result = UserMetaSchema().dump(u)
+    assert not result.errors
+    assert result.data['name'] == u.name
+    assert result.data['balance'] == decimal.Decimal('100.00')
+    assert result.data['uppername'] == "JOHN"
+    assert result.data['is_old'] is False
+    assert result.data['created'] == utils.isoformat(u.created)
+    assert result.data['updated_local'] == utils.isoformat(u.updated, localtime=True)
+    assert result.data['finger_count'] == 10
 
 
 def test_meta_fields_mapping(user):
@@ -735,7 +735,7 @@ def test_meta_fields_mapping(user):
     assert type(s.fields['updated']) == fields.DateTime
     assert type(s.fields['updated_local']) == fields.LocalDateTime
     assert type(s.fields['age']) == fields.Float
-    assert type(s.fields['balance']) == fields.Price
+    assert type(s.fields['balance']) == fields.Decimal
     assert type(s.fields['registered']) == fields.Boolean
     assert type(s.fields['sex_choices']) == fields.Raw
     assert type(s.fields['hair_colors']) == fields.Raw
@@ -839,22 +839,15 @@ def test_serializing_none_meta():
 class CustomError(Exception):
     pass
 
-def handle_errors(schema, errors, obj):
-    raise CustomError('Something bad happened')
 
 class MySchema(Schema):
     name = fields.String()
     email = fields.Email()
     age = fields.Integer()
 
-    class Meta:
-        error_handler = handle_errors
+    def handle_error(self, errors, obj):
+        raise CustomError('Something bad happened')
 
-class MySchema2(Schema):
-    homepage = fields.URL()
-
-    class Meta:
-        error_handler = handle_errors
 
 class TestErrorHandler:
 
@@ -876,60 +869,96 @@ class TestErrorHandler:
             MySchema().dump(user)
 
     def test_load_with_custom_error_handler(self):
-        def handle_errors3(serializer, errors, data):
-            assert isinstance(serializer, MySchema3)
-            assert 'email' in errors
-            assert isinstance(data, dict)
-            raise CustomError('Something bad happened')
+        in_data = {'email': 'invalid'}
 
         class MySchema3(Schema):
             email = fields.Email()
 
-            class Meta:
-                error_handler = handle_errors3
+            def handle_error(self, error, data):
+                assert type(error) is ValidationError
+                assert 'email' in error.messages
+                assert error.field_names == ['email']
+                assert error.fields == [self.fields['email']]
+                assert data == in_data
+                raise CustomError('Something bad happened')
+
         with pytest.raises(CustomError):
-            MySchema3().load({'email': 'invalid'})
+            MySchema3().load(in_data)
+
+    def test_load_with_custom_error_handler_and_partially_valid_data(self):
+        in_data = {'email': 'invalid', 'url': 'http://valid.com'}
+
+        class MySchema(Schema):
+            email = fields.Email()
+            url = fields.URL()
+
+            def handle_error(self, error, data):
+                assert type(error) is ValidationError
+                assert 'email' in error.messages
+                assert error.field_names == ['email']
+                assert error.fields == [self.fields['email']]
+                assert data == in_data
+                raise CustomError('Something bad happened')
+
+        with pytest.raises(CustomError):
+            MySchema().load(in_data)
+
+    def test_custom_error_handler_with_validates_decorator(self):
+        in_data = {'num': -1}
+
+        class MySchema(Schema):
+            num = fields.Int()
+
+            @validates('num')
+            def validate_num(self, value):
+                if value < 0:
+                    raise ValidationError('Must be greater than 0.')
+
+            def handle_error(self, error, data):
+                assert type(error) is ValidationError
+                assert 'num' in error.messages
+                assert error.field_names == ['num']
+                assert error.fields == [self.fields['num']]
+                assert data == in_data
+                raise CustomError('Something bad happened')
+
+        with pytest.raises(CustomError):
+            MySchema().load(in_data)
+
+    def test_custom_error_handler_with_validates_schema_decorator(self):
+        in_data = {'num': -1}
+
+        class MySchema(Schema):
+            num = fields.Int()
+
+            @validates_schema
+            def validates_schema(self, data):
+                raise ValidationError('Invalid schema!')
+
+            def handle_error(self, error, data):
+                assert type(error) is ValidationError
+                assert '_schema' in error.messages
+                assert error.field_names == ['_schema']
+                assert error.fields == []
+                assert data == in_data
+                raise CustomError('Something bad happened')
+
+        with pytest.raises(CustomError):
+            MySchema().load(in_data)
 
     def test_validate_with_custom_error_handler(self):
         with pytest.raises(CustomError):
             MySchema().validate({'age': 'notvalid', 'email': 'invalid'})
 
-    def test_multiple_serializers_with_same_error_handler(self, user):
-        user.email = 'bademail'
-        user.homepage = 'foo'
-
-        user = {'email': 'bademail', 'homepage': 'foo'}
-        with pytest.raises(CustomError):
-            MySchema().load(user)
-        with pytest.raises(CustomError):
-            MySchema2().load(user)
-
-    def test_setting_error_handler_class_attribute(self):
-        def handle_errors(serializer, errors, obj):
-            raise CustomError('Something bad happened')
-
-        class ErrorSchema(Schema):
-            email = fields.Email()
-            __error_handler__ = handle_errors
-
-        class ErrorSchemaSub(ErrorSchema):
-            pass
-
-        user = {'email': 'invalid'}
-
-        ser = ErrorSchema()
-        with pytest.raises(CustomError):
-            ser.load(user)
-
-        subser = ErrorSchemaSub()
-        with pytest.raises(CustomError):
-            subser.load(user)
 
 class TestFieldValidation:
 
     def test_errors_are_cleared_after_loading_collection(self):
+        def always_fail(val):
+            raise ValidationError('lol')
+
         class MySchema(Schema):
-            foo = fields.Str(validate=lambda x: False)
+            foo = fields.Str(validate=always_fail)
 
         schema = MySchema()
         _, errors = schema.load([
@@ -1181,26 +1210,26 @@ class TestNestedSchema:
 
         result = sch.load({'inner': 'invalid'})
         assert 'inner' in result.errors
-        assert result.errors['inner'] == ['Expected a collection of dicts, got a str.']
+        assert result.errors['inner'] == ['Invalid type.']
 
         class OuterSchema(Schema):
             inner = fields.Nested(InnerSchema)
 
         schema = OuterSchema()
         _, errors = schema.load({'inner': 1})
-        assert errors['inner']['_schema'] == ['Data must be a dict, got a int']
+        assert errors['inner']['_schema'] == ['Invalid input type.']
 
     def test_missing_required_nested_field(self):
         class Inner(Schema):
-            inner_req = fields.Field(required='Oops')
+            inner_req = fields.Field(required=True, error_messages={'required': 'Oops'})
             inner_not_req = fields.Field()
-            inner_bad = fields.Integer(required='Int plz')
+            inner_bad = fields.Integer(required=True, error_messages={'required': 'Int plz'})
 
         class Middle(Schema):
-            middle_req = fields.Nested(Inner, required=True)
+            middle_many_req = fields.Nested(Inner, required=True, many=True)
             middle_req_2 = fields.Nested(Inner, required=True)
             middle_not_req = fields.Nested(Inner)
-            middle_field = fields.Field(required='middlin')
+            middle_field = fields.Field(required=True, error_messages={'required': 'middlin'})
 
         class Outer(Schema):
             outer_req = fields.Nested(Middle, required=True)
@@ -1210,14 +1239,14 @@ class TestNestedSchema:
 
         outer = Outer()
         expected = {
-            'outer_many_req': {0: {'middle_req': {'inner_bad': ['Int plz'],
-                                                   'inner_req': ['Oops']},
-                                    'middle_req_2': {'inner_bad': ['Int plz'],
-                                                     'inner_req': ['Oops']}},
-                                'middle_field': ['middlin']},
-             'outer_req': {'middle_field': ['middlin'],
-                           'middle_req': {'inner_bad': ['Int plz'],
-                                          'inner_req': ['Oops']},
+            'outer_many_req': {0: {'middle_many_req': {0: {'inner_bad': ['Int plz'],
+                                                           'inner_req': ['Oops']}},
+                                   'middle_req_2': {'inner_bad': ['Int plz'],
+                                                    'inner_req': ['Oops']},
+                                   'middle_field': ['middlin']}},
+            'outer_req': {'middle_field': ['middlin'],
+                           'middle_many_req': {0: {'inner_bad': ['Int plz'],
+                                              'inner_req': ['Oops']}},
                            'middle_req_2': {'inner_bad': ['Int plz'],
                                             'inner_req': ['Oops']}}}
         data, errors = outer.load({})
@@ -1269,6 +1298,56 @@ class TestSelfReference:
         assert data['age'] == user.age
         assert data['employer']['name'] == employer.name
         assert data['employer']['age'] == employer.age
+
+    def test_recursive_missing_required_field(self):
+        class BasicSchema(Schema):
+            sub_basics = fields.Nested("self", required=True)
+
+        data, errors = BasicSchema().load({})
+        assert data == {}
+        assert errors == {
+            'sub_basics': ['Missing data for required field.']
+        }
+
+    def test_recursive_missing_required_field_one_level_in(self):
+        class BasicSchema(Schema):
+            sub_basics = fields.Nested("self", required=True, exclude=('sub_basics', ))
+            simple_field = fields.Str(required=True)
+
+        class DeepSchema(Schema):
+            basic = fields.Nested(BasicSchema(), required=True)
+
+        data, errors = DeepSchema().load({})
+        assert data == {}
+
+        assert errors == {
+            'basic': {
+                'sub_basics':  [u'Missing data for required field.'] ,
+                'simple_field': [u'Missing data for required field.'],
+            }
+        }
+
+        partially_valid = {
+            'basic': {'sub_basics': {'simple_field': 'foo'}}
+        }
+        data, errors = DeepSchema().load(partially_valid)
+        assert data == partially_valid
+        assert errors == {
+            'basic': {
+                'simple_field': [u'Missing data for required field.'],
+            }
+        }
+
+        partially_valid2 = {
+            'basic': {'simple_field': 'foo'}
+        }
+        data, errors = DeepSchema().load(partially_valid2)
+        assert data == partially_valid2
+        assert errors == {
+            'basic': {
+                'sub_basics': ['Missing data for required field.'],
+            }
+        }
 
     def test_nested_self_with_only_param(self, user, employer):
         class SelfSchema(Schema):
@@ -1335,7 +1414,8 @@ def test_deserialization_with_required_field_and_custom_validator():
     class ValidatingSchema(Schema):
         color = fields.String(required=True,
                         validate=lambda x: x.lower() == 'red' or x.lower() == 'blue',
-                        error="Color must be red or blue")
+                        error_messages={
+                            'validator_failed': "Color must be red or blue"})
 
     data, errors = ValidatingSchema().load({'name': 'foo'})
     assert errors
@@ -1507,8 +1587,8 @@ class TestAccessor:
             name = fields.Str()
             email = fields.Email()
 
-            class Meta:
-                accessor = get_from_dict
+            def get_attribute(self, attr, obj, default):
+                return get_from_dict(self, attr, obj, default)
 
         user_dict = {'_name': 'joe', '_email': 'joe@shmoe.com'}
         schema = UserDictSchema()
@@ -1526,8 +1606,8 @@ class TestAccessor:
             name = fields.Str()
             email = fields.Email()
 
-            class Meta:
-                accessor = get_from_dict
+            def get_attribute(self, attr, obj, default):
+                return get_from_dict(self, attr, obj, default)
 
         user_dicts = [{'_name': 'joe', '_email': 'joe@shmoe.com'},
                       {'_name': 'jane', '_email': 'jane@shmane.com'}]
