@@ -42,6 +42,11 @@ class TestDeserializingNone:
             field.deserialize(None)
         assert 'Field may not be null.' in str(excinfo)
 
+    def test_allow_none_is_true_if_missing_is_true(self):
+        field = fields.Field(missing=None)
+        assert field.allow_none is True
+        field.deserialize(None) is None
+
     def test_list_field_deserialize_none_to_empty_list(self):
         field = fields.List(fields.String(allow_none=True), allow_none=True)
         assert field.deserialize(None) is None
@@ -447,6 +452,13 @@ class TestFieldDeserialization:
             field.deserialize(in_value)
         msg = 'Not a valid date.'
         assert excinfo.value.args[0] == msg
+
+    def test_dict_field_deserialization(self):
+        field = fields.Dict()
+        assert field.deserialize({"foo": "bar"}) == {"foo": "bar"}
+        with pytest.raises(ValidationError) as excinfo:
+            field.deserialize('baddict')
+        assert excinfo.value.args[0] == 'Not a valid mapping type.'
 
     def test_url_field_deserialization(self):
         field = fields.Url()

@@ -11,9 +11,9 @@ from marshmallow.decorators import (
     pre_dump, post_dump, pre_load, post_load, validates, validates_schema
 )
 from marshmallow.utils import pprint, missing
-from marshmallow.exceptions import MarshallingError, UnmarshallingError, ValidationError
+from marshmallow.exceptions import ValidationError
 
-__version__ = '2.0.0'
+__version__ = '2.1.0'
 __author__ = 'Steven Loria'
 __license__ = 'MIT'
 
@@ -29,8 +29,6 @@ __all__ = [
     'pprint',
     'MarshalResult',
     'UnmarshalResult',
-    'MarshallingError',
-    'UnmarshallingError',
     'ValidationError',
     'missing',
 ]

@@ -3,6 +3,7 @@
 
 from __future__ import absolute_import, unicode_literals
 
+import collections
 import datetime as dt
 import uuid
 import warnings
@@ -19,6 +20,7 @@ __all__ = [
     'Field',
     'Raw',
     'Nested',
+    'Dict',
     'List',
     'String',
     'UUID',
@@ -73,8 +75,9 @@ class Field(FieldABC):
         If it returns `False`, an :exc:`ValidationError` is raised.
     :param required: Raise an :exc:`ValidationError` if the field value
         is not supplied during deserialization.
-    :param allow_none: Set to `True` if `None` should be considered a valid value during
-        validation/deserialization.
+    :param allow_none: Set this to `True` if `None` should be considered a valid value during
+        validation/deserialization. If ``missing=None`` and ``allow_none`` is unset,
+        will default to ``True``. Otherwise, the default is ``False``.
     :param bool load_only: If `True` skip this field during serialization, otherwise
         its value will be present in the serialized data.
     :param bool dump_only: If `True` skip this field during deserialization, otherwise
@@ -121,7 +124,7 @@ class Field(FieldABC):
     }
 
     def __init__(self, default=missing_, attribute=None, load_from=None, error=None,
-                 validate=None, required=False, allow_none=False, load_only=False,
+                 validate=None, required=False, allow_none=None, load_only=False,
                  dump_only=False, missing=missing_, error_messages=None, **metadata):
         self.default = default
         self.attribute = attribute
@@ -153,7 +156,14 @@ class Field(FieldABC):
                 '{"null": "Your message"} to `error_messages` instead.',
                 DeprecationWarning
             )
-        self.allow_none = allow_none
+        # If missing=None, None should be considered valid by default
+        if allow_none is None:
+            if missing is None:
+                self.allow_none = True
+            else:
+                self.allow_none = False
+        else:
+            self.allow_none = allow_none
         self.load_only = load_only
         self.dump_only = dump_only
         self.missing = missing
@@ -318,10 +328,20 @@ class Field(FieldABC):
         """
         return value
 
+    # Properties
+
     @property
     def context(self):
         """The context dictionary for the parent :class:`Schema`."""
         return self.parent.context
+
+    @property
+    def root(self):
+        """Reference to the top-level `Schema` that this field belongs to."""
+        ret = self
+        while ret.parent:
+            ret = ret.parent
+        return ret
 
 class Raw(Field):
     """Field that applies no formatting or validation."""
@@ -519,7 +539,8 @@ class List(Field):
 
     def _add_to_schema(self, field_name, schema):
         super(List, self)._add_to_schema(field_name, schema)
-        self.container._add_to_schema(field_name, schema)
+        self.container.parent = self
+        self.container.name = field_name
 
     def _serialize(self, value, attr, obj):
         if value is None:
@@ -994,6 +1015,28 @@ class TimeDelta(Field):
             self.fail('invalid')
 
 
+class Dict(Field):
+    """A dict field. Supports dicts and dict-like objects.
+
+    .. note::
+        This field is only appropriate when the structure of
+        nested data is not known. For structured data, use
+        `Nested`.
+
+    .. versionadded:: 2.1.0
+    """
+
+    default_error_messages = {
+        'invalid': 'Not a valid mapping type.'
+    }
+
+    def _deserialize(self, value, attr, data):
+        if isinstance(value, collections.Mapping):
+            return value
+        else:
+            self.fail('invalid')
+
+
 class ValidatedField(Field):
     """A field that validates input on serialization."""
 
@@ -1003,6 +1046,7 @@ class ValidatedField(Field):
     def _serialize(self, value, *args, **kwargs):
         ret = super(ValidatedField, self)._serialize(value, *args, **kwargs)
         return self._validated(ret)
+
 
 class Url(ValidatedField, String):
     """A validated URL field. Validation occurs during both serialization and

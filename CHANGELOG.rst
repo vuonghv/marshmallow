@@ -1,6 +1,28 @@
 Changelog
 ---------
 
+2.1.0 (2015-09-30)
+++++++++++++++++++
+
+Features:
+
+- Add ``Dict`` field for arbitrary mapping data (:issue:`251`). Thanks :user:`dwieeb` for adding this and :user:`Dowwie` for the suggestion.
+- Add ``Field.root`` property, which references the field's Schema.
+
+Deprecation/Removals:
+
+- The ``extra`` param of ``Schema`` is deprecated. Add extra data in a ``post_load`` method instead.
+- ``UnmarshallingError`` and ``MarshallingError`` are removed.
+
+Bug fixes:
+
+- Fix storing multiple schema-level validation errors (:issue:`287`). Thanks :user:`evgeny-sureev` for the patch.
+- If ``missing=None`` on a field, ``allow_none`` will be set to ``True``.
+
+Other changes:
+
+- A ``List's`` inner field will have the list field set as its parent. Use ``root`` to access the ``Schema``.
+
 2.0.0 (2015-09-25)
 ++++++++++++++++++
 
@@ -12,7 +34,7 @@ Deprecation/Removals:
 
 - Remove ``make_object``. Use a ``post_load`` method instead (:issue:`277`).
 - Remove the ``error`` parameter and attribute of ``Field``.
-- Passing string arguments to ``required`` and ``allow_none`` is deprecated. Pass the ``error_messages`` argument instead. **This API will be removed in version 2.1**.
+- Passing string arguments to ``required`` and ``allow_none`` is deprecated. Pass the ``error_messages`` argument instead. **This API will be removed in version 2.2**.
 - Remove ``Arbitrary``, ``Fixed``, and ``Price`` fields (:issue:`86`). Use ``Decimal`` instead.
 - Remove ``Select`` / ``Enum`` fields (:issue:`135`). Use the ``OneOf`` validator instead.
 
