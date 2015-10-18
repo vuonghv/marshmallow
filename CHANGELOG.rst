@@ -1,6 +1,13 @@
 Changelog
 ---------
 
+2.1.3 (2015-10-18)
+++++++++++++++++++
+
+Bug fixes:
+
+- Fix serialization of collections for which `iter` will modify position, e.g. Pymongo cursors (:issue:`303`). Thanks :user:`Mise` for the catch and patch.
+
 2.1.2 (2015-10-14)
 ++++++++++++++++++
 
