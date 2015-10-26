@@ -235,7 +235,7 @@ Validation functions either return a boolean or raise a :exc:`ValidationError`. 
 
 .. note::
 
-    :meth:`Schema.dump` also returns a dictionary of errors, which will include any ``ValidationErrors`` raised during serialization. However, the ``required``, ``allow_none``, and ``validate`` parameters only apply during deserialization.
+    :meth:`Schema.dump` also returns a dictionary of errors, which will include any ``ValidationErrors`` raised during serialization. However, ``required``, ``allow_none``, ``validate``, `@validates <marshmallow.decorators.validates>`, and `@validates_schema <marshmallow.decorators.validates_schema>` only apply during deserialization.
 
 
 Field Validators as Methods
@@ -252,9 +252,9 @@ It is often convenient to write validators as methods. Use the `validates <marsh
 
         @validates('quantity')
         def validate_quantity(self, value):
-            if n < 0:
+            if value < 0:
                 raise ValidationError('Quantity must be greater than 0.')
-            if n > 30:
+            if value > 30:
                 raise ValidationError('Quantity must not be greater than 30.')
 
 
@@ -302,6 +302,22 @@ Dictionaries or lists are also accepted as the custom error message, in case you
     # {'name': ['Missing data for required field.'],
     #  'age': ['Age is required.'],
     #  'city': {'message': 'City required', 'code': 400}}
+
+Partial Loading
++++++++++++++++
+
+When using the same schema in multiple places, you may only want to check required fields some of the time when deserializing. You can ignore missing fields entirely by setting ``partial=True``.
+
+.. code-block:: python
+    :emphasize-lines: 5,6
+
+    class UserSchema(Schema):
+        name = fields.String(required=True)
+        age = fields.Integer(required=True)
+
+    data, errors = UserSchema().load({'age': 42}, partial=True)
+    # OR UserSchema(partial=True).load({'age': 42})
+    data, errors  # => ({'age': 42}, {})
 
 Schema.validate
 +++++++++++++++

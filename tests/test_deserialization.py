@@ -549,70 +549,6 @@ class TestFieldDeserialization:
         with pytest.raises(ValueError):
             s.fields['uppername'].deserialize('STEVE')
 
-    def test_query_select_field_func_key_deserialization(self):
-        query = lambda: [DummyModel(ch) for ch in 'abc']
-
-        field = fields.QuerySelect(query, str)
-        assert field.deserialize('bar a') == DummyModel('a')
-        assert field.deserialize('bar b') == DummyModel('b')
-        assert field.deserialize('bar c') == DummyModel('c')
-        with pytest.raises(ValidationError):
-            field.deserialize('bar d')
-        with pytest.raises(ValidationError):
-            field.deserialize('c')
-        assert list(field.keys()) == ['bar ' + ch for ch in 'abc']
-        assert list(field.results()) == [DummyModel(ch) for ch in 'abc']
-        assert list(field.pairs()) == [('bar ' + ch, DummyModel(ch)) for ch in 'abc']
-        assert list(field.labels()) == [('bar ' + ch, 'bar ' + ch) for ch in 'abc']
-        assert list(field.labels('foo')) == [('bar ' + ch, ch) for ch in 'abc']
-        assert list(field.labels(str)) == [('bar ' + ch, 'bar ' + ch) for ch in 'abc']
-
-    def test_query_select_field_string_key_deserialization(self):
-        query = lambda: [DummyModel(ch) for ch in 'abc']
-
-        field = fields.QuerySelect(query, 'foo')
-        assert field.deserialize('a') == DummyModel('a')
-        assert field.deserialize('b') == DummyModel('b')
-        assert field.deserialize('c') == DummyModel('c')
-        with pytest.raises(ValidationError):
-            field.deserialize('d')
-        with pytest.raises(ValidationError):
-            field.deserialize('bar d')
-        assert list(field.keys()) == [ch for ch in 'abc']
-        assert list(field.results()) == [DummyModel(ch) for ch in 'abc']
-        assert list(field.pairs()) == [(ch, DummyModel(ch)) for ch in 'abc']
-        assert list(field.labels()) == [(ch, 'bar ' + ch) for ch in 'abc']
-        assert list(field.labels('foo')) == [(ch, ch) for ch in 'abc']
-        assert list(field.labels(str)) == [(ch, 'bar ' + ch) for ch in 'abc']
-
-    def test_query_select_list_field_func_key_deserialization(self):
-        query = lambda: [DummyModel(ch) for ch in 'abecde']
-
-        field = fields.QuerySelectList(query, str)
-        assert field.deserialize(['bar a', 'bar c', 'bar b']) == \
-               [DummyModel('a'), DummyModel('c'), DummyModel('b')]
-        assert field.deserialize(['bar d', 'bar e', 'bar e']) == \
-               [DummyModel('d'), DummyModel('e'), DummyModel('e')]
-        assert field.deserialize([]) == []
-        with pytest.raises(ValidationError):
-            field.deserialize(['a', 'b', 'f'])
-        with pytest.raises(ValidationError):
-            field.deserialize(['a', 'b', 'b'])
-
-    def test_query_select_list_field_string_key_deserialization(self):
-        query = lambda: [DummyModel(ch) for ch in 'abecde']
-
-        field = fields.QuerySelectList(query, 'foo')
-        assert field.deserialize(['a', 'c', 'b']) == \
-               [DummyModel('a'), DummyModel('c'), DummyModel('b')]
-        assert field.deserialize(['d', 'e', 'e']) == \
-               [DummyModel('d'), DummyModel('e'), DummyModel('e')]
-        assert field.deserialize([]) == []
-        with pytest.raises(ValidationError):
-            field.deserialize(['a', 'b', 'f'])
-        with pytest.raises(ValidationError):
-            field.deserialize(['a', 'b', 'b'])
-
     def test_datetime_list_field_deserialization(self):
         dtimes = dt.datetime.now(), dt.datetime.now(), dt.datetime.utcnow()
         dstrings = [each.isoformat() for each in dtimes]
@@ -1089,6 +1025,28 @@ class TestSchemaDeserialization:
         assert len(errors['foo']) == 1
         assert 'Missing data for required field.' in errors['foo']
 
+    @pytest.mark.parametrize('partial_schema',
+    [
+        True,
+        False
+    ])
+    def test_partial_deserialization(self, partial_schema):
+        class MySchema(Schema):
+            foo = fields.Field(required=True)
+            bar = fields.Field(required=True)
+
+        schema_args = {}
+        load_args = {}
+        if partial_schema:
+            schema_args['partial'] = True
+        else:
+            load_args['partial'] = True
+        data, errors = MySchema(**schema_args).load({'foo': 3}, **load_args)
+
+        assert data['foo'] == 3
+        assert 'bar' not in data
+        assert not errors
+
 validators_gen = (func for func in [lambda x: x <= 24, lambda x: 18 <= x])
 
 validators_gen_float = (func for func in
@@ -1203,7 +1161,7 @@ def test_required_field_failure(FieldClass):  # noqa
                                      ['first error', 'second error']])
 def test_required_message_can_be_changed(message):
     class RequireSchema(Schema):
-        age = fields.Integer(required=message)
+        age = fields.Integer(required=True, error_messages={'required': message})
 
     user_data = {"name": "Phil"}
     data, errs = RequireSchema().load(user_data)

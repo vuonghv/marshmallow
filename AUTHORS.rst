@@ -46,5 +46,7 @@ Contributors (chronological)
 - Evgeny Sureev `@evgeny-sureev <https://github.com/evgeny-sureev>`_
 - Matt Bachmann `@Bachmann1234 <https://github.com/Bachmann1234>`_
 - Daniel Imhoff `@dwieeb <https://github.com/dwieeb>`_
+- Juan Rossi `@juanrossi <https://github.com/juanrossi>`_
 - Andrew Haigh `@nelfin <https://github.com/nelfin>`_
 - `@Mise <https://github.com/Mise>`_
+- Taylor Edmiston `@tedmiston <https://github.com/tedmiston>`_

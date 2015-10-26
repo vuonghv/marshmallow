@@ -40,8 +40,6 @@ __all__ = [
     'Email',
     'Method',
     'Function',
-    'QuerySelect',
-    'QuerySelectList',
     'Str',
     'Bool',
     'Int',
@@ -73,7 +71,7 @@ class Field(FieldABC):
         during deserialization. Validator takes a field's input value as
         its only parameter and returns a boolean.
         If it returns `False`, an :exc:`ValidationError` is raised.
-    :param required: Raise an :exc:`ValidationError` if the field value
+    :param required: Raise a :exc:`ValidationError` if the field value
         is not supplied during deserialization.
     :param allow_none: Set this to `True` if `None` should be considered a valid value during
         validation/deserialization. If ``missing=None`` and ``allow_none`` is unset,
@@ -143,19 +141,7 @@ class Field(FieldABC):
             raise ValueError("The 'validate' parameter must be a callable "
                              "or a collection of callables.")
 
-        if isinstance(required, basestring):
-            warnings.warn(
-                'Passing a string for `required` is deprecated. Pass '
-                '{"required": "Your message"} to `error_messages` instead.',
-                DeprecationWarning
-            )
         self.required = required
-        if isinstance(allow_none, basestring):
-            warnings.warn(
-                'Passing a string for `allow_none` is deprecated. Pass '
-                '{"null": "Your message"} to `error_messages` instead.',
-                DeprecationWarning
-            )
         # If missing=None, None should be considered valid by default
         if allow_none is None:
             if missing is None:
@@ -224,16 +210,9 @@ class Field(FieldABC):
             class_name = self.__class__.__name__
             msg = MISSING_ERROR_MESSAGE.format(class_name=class_name, key=key)
             raise AssertionError(msg)
-        message_string = msg.format(**kwargs)
-
-        # TODO: Remove this special casing once `required`and `allow_non` strings are
-        # removed from the API
-        if key == 'required':
-            message_string = message_string if isinstance(self.required, bool) else self.required
-        elif key == 'null':
-            message_string = message_string if isinstance(self.allow_none, bool) else self.allow_none
-
-        raise ValidationError(message_string)
+        if isinstance(msg, basestring):
+            msg = msg.format(**kwargs)
+        raise ValidationError(msg)
 
     def _validate_missing(self, value):
         """Validate missing values. Raise a :exc:`ValidationError` if
@@ -800,6 +779,11 @@ class DateTime(Field):
 
     Example: ``'2014-12-22T03:12:58.019077+00:00'``
 
+    Timezone-naive `datetime` objects are converted to
+    UTC (+00:00) by :meth:`Schema.dump <marshmallow.Schema.dump>`.
+    :meth:`Schema.load <marshmallow.Schema.load>` returns `datetime`
+    objects that are timezone-aware.
+
     :param str format: Either ``"rfc"`` (for RFC822), ``"iso"`` (for ISO8601),
         or a date format string. If `None`, defaults to "iso".
     :param kwargs: The same keyword arguments that :class:`Field` receives.
@@ -1183,159 +1167,6 @@ class Function(Field):
         return value
 
 
-class QuerySelect(Field):
-    """A field that (de)serializes an ORM-mapped object to its primary
-    (or otherwise unique) key and vice versa. A nonexistent key will
-    result in a validation error. This field is ORM-agnostic.
-
-    Example: ::
-
-        query = session.query(User).order_by(User.id).all
-        keygetter = 'id'
-        field = fields.QuerySelect(query, keygetter)
-
-    .. warning::
-        Be careful when using this with queries that return large result sets.
-        The (de)serialization of this field has an algorithmic complexity of O(N),
-        where N is the number of query results.
-
-    :param callable query: The query which will be executed at each
-        (de)serialization to find the list of valid objects and keys.
-    :param keygetter: Can be a callable or a string. In the former case, it must
-        be a one-argument callable which returns a unique comparable
-        key. In the latter case, the string specifies the name of
-        an attribute of the ORM-mapped object.
-    :param str error: Error message stored upon validation failure.
-    :param kwargs: The same keyword arguments that :class:`Field` receives.
-
-    .. versionadded:: 1.2.0
-    .. deprecated:: 2.0.0
-    """
-    default_error_messages = {
-        'invalid_key': 'Invalid key.',
-        'invalid_object': 'Invalid object.',
-    }
-
-    def __init__(self, query, keygetter, **kwargs):
-        warnings.warn(
-            'The QuerySelect field is deprecated.',
-            category=DeprecationWarning
-        )
-        self.query = query
-        self.keygetter = keygetter if callable(keygetter) else attrgetter(keygetter)
-        super(QuerySelect, self).__init__(**kwargs)
-
-    def keys(self):
-        """Return a generator over the valid keys."""
-        return (self.keygetter(item) for item in self.query())
-
-    def results(self):
-        """Return a generator over the query results."""
-        return (item for item in self.query())
-
-    def pairs(self):
-        """Return a generator over the (key, result) pairs."""
-        return ((self.keygetter(item), item) for item in self.query())
-
-    def labels(self, labelgetter=text_type):
-        """Return a generator over the (key, label) pairs, where
-        label is a string associated with each query result. This
-        convenience method is useful to populate, for instance,
-        a form select field.
-
-        :param labelgetter: Can be a callable or a string. In the former case,
-            it must be a one-argument callable which returns the label text. In the
-            latter case, the string specifies the name of an attribute of
-            the ORM-mapped object. If not provided the ORM-mapped object's
-            `__str__` or `__unicode__` method will be used.
-        """
-        labelgetter = labelgetter if callable(labelgetter) else attrgetter(labelgetter)
-        return ((self.keygetter(item), labelgetter(item)) for item in self.query())
-
-    def _serialize(self, value, attr, obj):
-        value = self.keygetter(value)
-
-        for key in self.keys():
-            if key == value:
-                return value
-        self.fail('invalid_object')
-
-    def _deserialize(self, value, attr, data):
-        for key, result in self.pairs():
-            if key == value:
-                return result
-
-        self.fail('invalid_key')
-
-
-class QuerySelectList(QuerySelect):
-    """A field that (de)serializes a list of ORM-mapped objects to
-    a list of their primary (or otherwise unique) keys and vice
-    versa. If any of the items in the list cannot be found in the
-    query, this will result in a validation error. This field
-    is ORM-agnostic.
-
-    .. warning::
-        Be careful when using this with queries that return large result sets.
-        The (de)serialization of this field has an algorithmic complexity of O(N*M),
-        where N is the number of query results and M is the length of the list to
-        (de)serialize.
-
-    :param callable query: Same as :class:`QuerySelect`.
-    :param keygetter: Same as :class:`QuerySelect`.
-    :param str error: Error message stored upon validation failure.
-    :param kwargs: The same keyword arguments that :class:`Field` receives.
-
-    .. versionadded:: 1.2.0
-    .. deprecated:: 2.0.0
-    """
-    default_error_messages = {
-        'invalid_keys': 'Invalid keys.',
-        'invalid_objects': 'Invalid objects.',
-    }
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            'The QuerySelectList field is deprecated.',
-            category=DeprecationWarning
-        )
-        super(QuerySelectList, self).__init__(*args, **kwargs)
-
-    def _serialize(self, value, attr, obj):
-        items = [self.keygetter(v) for v in value]
-
-        if not items:
-            return []
-
-        keys = list(self.keys())
-
-        for item in items:
-            try:
-                keys.remove(item)
-            except ValueError:
-                self.fail('invalid_objects')
-
-        return items
-
-    def _deserialize(self, value, attr, data):
-        if not value:
-            return []
-
-        keys, results = (list(t) for t in zip(*self.pairs()))
-        items = []
-
-        for val in value:
-            try:
-                index = keys.index(val)
-            except ValueError:
-                self.fail('invalid_keys')
-            else:
-                del keys[index]
-                items.append(results.pop(index))
-
-        return items
-
-
 class Constant(Field):
     """A field that (de)serializes to a preset constant.  If you only want the
     constant added for serialization or deserialization, you should use
@@ -1356,7 +1187,7 @@ class Constant(Field):
     def _serialize(self, value, *args, **kwargs):
         return self.constant
 
-    def _deserialize(self, value, attr, data):
+    def _deserialize(self, value, *args, **kwargs):
         return self.constant
 
 

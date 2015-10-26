@@ -1,6 +1,23 @@
 Changelog
 ---------
 
+2.2.0 (2015-10-26)
+++++++++++++++++++
+
+Features:
+
+- Add support for partial deserialization with the ``partial`` argument to ``Schema`` and ``Schema.load`` (:issue:`290`). Thanks :user:`taion`.
+
+Deprecation/Removals:
+
+- ``Query`` and ``QuerySelect`` fields are removed.
+- Passing of strings to ``required`` and ``allow_none`` is removed. Pass the ``error_messages`` argument instead.
+
+Support:
+
+- Add example of Schema inheritance in docs (:issue:`225`). Thanks :user:`martinstein` for the suggestion and :user:`juanrossi` for the PR.
+- Add "Customizing Error Messages" section to custom fields docs.
+
 2.1.3 (2015-10-18)
 ++++++++++++++++++
 
