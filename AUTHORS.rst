@@ -53,3 +53,5 @@ Contributors (chronological)
 - Francisco Demartino `@franciscod <https://github.com/franciscod>`_
 - Eric Wang `@ewang <https://github.com/ewang>`_
 - Eugene Prikazchikov `@eprikazc <https://github.com/eprikazc>`_
+- Damian Heard `@DamianHeard <https://github.com/DamianHeard>`_
+- Alec Reiter `@justanr <https://github.com/justanr>`_

@@ -493,6 +493,16 @@ class TestFieldDeserialization:
                                 deserialize=lambda val: val.upper())
         assert field.deserialize('foo') == 'FOO'
 
+    def test_function_field_deserialization_with_context(self):
+        class Parent(Schema):
+            pass
+        field = fields.Function(
+            lambda x: None,
+            deserialize=lambda val, context: val.upper() + context['key']
+        )
+        field.parent = Parent(context={'key': 'BAR'})
+        assert field.deserialize('foo') == 'FOOBAR'
+
     def test_uuid_field_deserialization(self):
         field = fields.UUID()
         uuid_str = str(uuid.uuid4())
@@ -548,6 +558,16 @@ class TestFieldDeserialization:
         s = BadSchema()
         with pytest.raises(ValueError):
             s.fields['uppername'].deserialize('STEVE')
+
+    def test_method_field_deserialize_only(self):
+        class MethodDeserializeOnly(Schema):
+            def lowercase_name(self, value):
+                return value.lower()
+
+        m = fields.Method(deserialize='lowercase_name')
+        m.parent = MethodDeserializeOnly()
+
+        assert m.deserialize('ALEC') == 'alec'
 
     def test_datetime_list_field_deserialization(self):
         dtimes = dt.datetime.now(), dt.datetime.now(), dt.datetime.utcnow()

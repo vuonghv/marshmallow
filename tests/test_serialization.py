@@ -9,6 +9,7 @@ import pytest
 from marshmallow import Schema, fields, utils
 from marshmallow.exceptions import ValidationError
 from marshmallow.compat import basestring, OrderedDict
+from marshmallow.utils import missing as missing_
 
 from tests.base import User, DummyModel, ALL_FIELDS
 
@@ -55,9 +56,25 @@ class TestFieldSerialization:
         field = fields.Field(default=lambda: 'nan')
         assert field.serialize('age', {}) == 'nan'
 
-    def test_function_field(self, user):
+    def test_function_field_passed_func(self, user):
         field = fields.Function(lambda obj: obj.name.upper())
         assert "FOO" == field.serialize("key", user)
+
+    def test_function_field_passed_serialize(self, user):
+        field = fields.Function(serialize=lambda obj: obj.name.upper())
+        assert "FOO" == field.serialize("key", user)
+
+    def test_function_field_passed_func_is_deprecated(self):
+        pytest.deprecated_call(lambda: fields.Function(func=lambda obj: obj.name.upper()))
+
+    def test_function_field_passed_serialize_with_context(self, user, monkeypatch):
+        class Parent(Schema):
+            pass
+        field = fields.Function(
+            serialize=lambda obj, context: obj.name.upper() + context['key']
+        )
+        field.parent = Parent(context={'key': 'BAR'})
+        assert "FOOBAR" == field.serialize("key", user)
 
     def test_function_field_passed_uncallable_object(self):
         with pytest.raises(ValueError):
@@ -321,6 +338,48 @@ class TestFieldSerialization:
         u = User('Foo')
         with pytest.raises(ValueError):
             BadSerializer().dump(u)
+
+    def test_method_prefers_serialize_over_method_name(self):
+        m = fields.Method(serialize='serialize', method_name='method')
+        assert m.serialize_method_name == 'serialize'
+
+    def test_method_with_no_serialize_is_missing(self):
+        m = fields.Method()
+        m.parent = Schema()
+
+        assert m.serialize('', '', '') is missing_
+
+    def test_serialize_with_dump_to_param(self):
+        class DumpToSchema(Schema):
+            name = fields.String(dump_to='NamE')
+            years = fields.Integer(dump_to='YearS')
+        data = {
+            'name': 'Richard',
+            'years': 11
+        }
+        result, errors = DumpToSchema().dump(data)
+        assert result == {
+            'NamE': 'Richard',
+            'YearS': 11
+        }
+
+    def test_serialize_with_attribute_and_dump_to_uses_dump_to(self):
+        class ConfusedDumpToAndAttributeSerializer(Schema):
+            name = fields.String(dump_to="FullName")
+            username = fields.String(attribute='uname', dump_to='UserName')
+            years = fields.Integer(attribute='le_wild_age', dump_to='Years')
+        data = {
+            'name': 'Mick',
+            'uname': 'mick_the_awesome',
+            'le_wild_age': 999
+        }
+        result, errors = ConfusedDumpToAndAttributeSerializer().dump(data)
+
+        assert result == {
+            'FullName': 'Mick',
+            'UserName': 'mick_the_awesome',
+            'Years': 999,
+        }
 
     def test_datetime_serializes_to_iso_by_default(self, user):
         field = fields.DateTime()  # No format specified

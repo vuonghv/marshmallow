@@ -67,6 +67,7 @@ class Field(FieldABC):
     :param str load_from: Additional key to look for when deserializing. Will only
         be checked if the field's name is not found on the input dictionary. If checked,
         it will return this parameter on error.
+    :param str dump_to: Field name to use as a key when serializing.
     :param callable validate: Validator or collection of validators that are called
         during deserialization. Validator takes a field's input value as
         its only parameter and returns a boolean.
@@ -121,12 +122,13 @@ class Field(FieldABC):
         'validator_failed': 'Invalid value.'
     }
 
-    def __init__(self, default=missing_, attribute=None, load_from=None, error=None,
-                 validate=None, required=False, allow_none=None, load_only=False,
+    def __init__(self, default=missing_, attribute=None, load_from=None, dump_to=None,
+                 error=None, validate=None, required=False, allow_none=None, load_only=False,
                  dump_only=False, missing=missing_, error_messages=None, **metadata):
         self.default = default
         self.attribute = attribute
         self.load_from = load_from  # this flag is used by Unmarshaller
+        self.dump_to = dump_to  # this flag is used by Marshaller
         self.validate = validate
         if utils.is_iterable_but_not_string(validate):
             if not utils.is_generator(validate):
@@ -1097,19 +1099,28 @@ class Method(Field):
 
     .. versionchanged:: 2.0.0
         Removed optional ``context`` parameter on methods. Use ``self.context`` instead.
+    .. versionchanged:: 2.3.0
+        Deprecated ``method_name`` parameter in favor of ``serialize`` and allow
+        ``serialize`` to not be passed at all.
     """
     _CHECK_ATTRIBUTE = False
 
-    def __init__(self, method_name, deserialize=None, **kwargs):
-        self.method_name = method_name
-        if deserialize:
-            self.deserialize_method_name = deserialize
-        else:
-            self.deserialize_method_name = None
+    def __init__(self, serialize=None, deserialize=None, method_name=None, **kwargs):
+        if method_name is not None:
+            warnings.warn('"method_name" argument of fields.Method is deprecated. '
+                          'Use the "serialize" argument instead.', DeprecationWarning)
+
+        self.serialize_method_name = self.method_name = serialize or method_name
+        self.deserialize_method_name = deserialize
         super(Method, self).__init__(**kwargs)
 
     def _serialize(self, value, attr, obj):
-        method = utils.callable_or_raise(getattr(self.parent, self.method_name, None))
+        if not self.serialize_method_name:
+            return missing_
+
+        method = utils.callable_or_raise(
+            getattr(self.parent, self.serialize_method_name, None)
+        )
         try:
             return method(obj)
         except AttributeError:
@@ -1131,40 +1142,56 @@ class Method(Field):
 class Function(Field):
     """A field that takes the value returned by a function.
 
-    :param callable func: A callable from which to retrieve the value.
+    :param callable serialize: A callable from which to retrieve the value.
         The function must take a single argument ``obj`` which is the object
         to be serialized. It can also optionally take a ``context`` argument,
         which is a dictionary of context variables passed to the serializer.
-    :param callable deserialize: Deserialization function that takes the value
-        to be deserialized as its only argument.
+        If no callable is provided then the ```load_only``` flag will be set
+        to True.
+    :param callable deserialize: A callable from which to retrieve the value.
+        The function must take a single argument ``value`` which is the value
+        to be deserialized. It can also optionally take a ``context`` argument,
+        which is a dictionary of context variables passed to the deserializer.
+        If no callable is provided then ```value``` will be passed through
+        unchanged.
+    :param callable func: This argument is to be deprecated. It exists for
+        backwards compatiblity. Use serialize instead.
+
+    .. versionchanged:: 2.3.0
+        Deprecated ``func`` parameter in favor of ``serialize``.
     """
     _CHECK_ATTRIBUTE = False
 
-    def __init__(self, func, deserialize=None, **kwargs):
+    def __init__(self, serialize=None, deserialize=None, func=None, **kwargs):
+        if func:
+            warnings.warn('"func" argument of fields.Function is deprecated. '
+                          'Use the "serialize" argument instead.', DeprecationWarning)
+            serialize = func
         super(Function, self).__init__(**kwargs)
-        self.func = utils.callable_or_raise(func)
-        if deserialize:
-            self.deserialize_func = utils.callable_or_raise(deserialize)
-        else:
-            self.deserialize_func = None
+        self.serialize_func = self.func = serialize and utils.callable_or_raise(serialize)
+        self.deserialize_func = deserialize and utils.callable_or_raise(deserialize)
 
     def _serialize(self, value, attr, obj):
         try:
-            if len(utils.get_func_args(self.func)) > 1:
-                if self.parent.context is None:
-                    msg = 'No context available for Function field {0!r}'.format(attr)
-                    raise ValidationError(msg)
-                return self.func(obj, self.parent.context)
-            else:
-                return self.func(obj)
+            return self._call_or_raise(self.serialize_func, obj, attr)
         except AttributeError:  # the object is not expected to have the attribute
             pass
         return missing_
 
     def _deserialize(self, value, attr, data):
         if self.deserialize_func:
-            return self.deserialize_func(value)
+            return self._call_or_raise(self.deserialize_func, value, attr)
         return value
+
+    def _call_or_raise(self, func, value, attr):
+        if len(utils.get_func_args(func)) > 1:
+            if self.parent.context is None:
+                msg = 'No context available for Function field {0!r}'.format(attr)
+                raise ValidationError(msg)
+            return func(value, self.parent.context)
+        else:
+            return func(value)
+
 
 
 class Constant(Field):
