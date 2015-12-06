@@ -1,6 +1,18 @@
 Changelog
 ---------
 
+2.4.0 (2015-12-06)
+++++++++++++++++++
+
+Features:
+
+- Add ``skip_on_field_errors`` parameter to ``validates_schema`` (:issue:`323`). Thanks :user:`jjvattamattom` for the suggestion and :user:`d-sutherland` for the PR.
+
+Bug fixes:
+
+- Fix ``FormattedString`` serialization (:issue:`348`). Thanks :user:`acaird` for reporting.
+- Fix ``@validates`` behavior when used when ``attribute`` is specified and ``strict=True`` (:issue:`350`). Thanks :user:`density` for reporting.
+
 2.3.0 (2015-11-22)
 ++++++++++++++++++
 
