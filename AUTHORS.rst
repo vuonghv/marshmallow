@@ -57,3 +57,5 @@ Contributors (chronological)
 - Alec Reiter `@justanr <https://github.com/justanr>`_
 - Dan Sutherland `@d-sutherland <https://github.com/d-sutherland>`_
 - Jeff Widman `@jeffwidman <https://github.com/jeffwidman>`_
+- Simeon Visser `@svisser <https://github.com/svisser>`_
+- Taylan Develioglu `@tdevelioglu <https://github.com/tdevelioglu>`_
