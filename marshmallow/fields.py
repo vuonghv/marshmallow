@@ -221,12 +221,11 @@ class Field(FieldABC):
         """Validate missing values. Raise a :exc:`ValidationError` if
         `value` should be considered missing.
         """
-        if value is missing_:
-            if hasattr(self, 'required') and self.required:
-                self.fail('required')
-        if value is None:
-            if hasattr(self, 'allow_none') and self.allow_none is not True:
-                self.fail('null')
+        if value is missing_ and hasattr(self, 'required') and self.required:
+            self.fail('required')
+        if (value is None and
+            hasattr(self, 'allow_none') and self.allow_none is not True):
+            self.fail('null')
 
     def serialize(self, attr, obj, accessor=None):
         """Pulls the value for the given key from the object, applies the
@@ -239,12 +238,10 @@ class Field(FieldABC):
         """
         if self._CHECK_ATTRIBUTE:
             value = self.get_value(attr, obj, accessor=accessor)
-            if value is missing_:
-                if hasattr(self, 'default'):
-                    if callable(self.default):
-                        return self.default()
-                    else:
-                        return self.default
+            if value is missing_ and hasattr(self, 'default'):
+                if callable(self.default):
+                    return self.default()
+                return self.default
         else:
             value = None
         return self._serialize(value, attr, obj)
@@ -450,27 +447,29 @@ class Nested(Field):
 
     def _check_required(self):
         errors = {}
-        if self.required:
-            for field_name, field in self.schema.fields.items():
-                if not field.required:
-                    continue
-                error_field_name = field.load_from or field_name
-                if (
-                    isinstance(field, Nested) and
-                    self.nested != _RECURSIVE_NESTED and
-                    field.nested != _RECURSIVE_NESTED
-                ):
-                    errors[error_field_name] = field._check_required()
-                else:
-                    try:
-                        field._validate_missing(field.missing)
-                    except ValidationError as ve:
-                        errors[error_field_name] = ve.messages
-            if self.many and errors:
-                errors = {0: errors}
-            # No inner errors; just raise required error like normal
-            if not errors:
-                self.fail('required')
+        if not self.required:
+            return {}
+
+        for field_name, field in self.schema.fields.items():
+            if not field.required:
+                continue
+            error_field_name = field.load_from or field_name
+            if (
+                isinstance(field, Nested) and
+                self.nested != _RECURSIVE_NESTED and
+                field.nested != _RECURSIVE_NESTED
+            ):
+                errors[error_field_name] = field._check_required()
+            else:
+                try:
+                    field._validate_missing(field.missing)
+                except ValidationError as ve:
+                    errors[error_field_name] = ve.messages
+        if self.many and errors:
+            errors = {0: errors}
+        # No inner errors; just raise required error like normal
+        if not errors:
+            self.fail('required')
         return errors
 
 
@@ -750,14 +749,14 @@ class Boolean(Field):
     def _deserialize(self, value, attr, data):
         if not self.truthy:
             return bool(value)
-        else:
-            try:
-                if value in self.truthy:
-                    return True
-                elif value in self.falsy:
-                    return False
-            except TypeError:
-                pass
+
+        try:
+            if value in self.truthy:
+                return True
+            elif value in self.falsy:
+                return False
+        except TypeError:
+            pass
         self.fail('invalid')
 
 class FormattedString(Field):
@@ -856,13 +855,13 @@ class DateTime(Field):
             return None
         self.dateformat = self.dateformat or self.DEFAULT_FORMAT
         format_func = self.DATEFORMAT_SERIALIZATION_FUNCS.get(self.dateformat, None)
-        if format_func:
-            try:
-                return format_func(value, localtime=self.localtime)
-            except (AttributeError, ValueError) as err:
-                self.fail('format', input=value)
-        else:
+        if not format_func:
             return value.strftime(self.dateformat)
+
+        try:
+            return format_func(value, localtime=self.localtime)
+        except (AttributeError, ValueError) as err:
+            self.fail('format', input=value)
 
     def _deserialize(self, value, attr, data):
         if not value:  # Falsy values, e.g. '', None, [] are not valid
@@ -1004,12 +1003,12 @@ class TimeDelta(Field):
             days = value.days
             if self.precision == self.DAYS:
                 return days
-            else:
-                seconds = days * 86400 + value.seconds
-                if self.precision == self.SECONDS:
-                    return seconds
-                else:  # microseconds
-                    return seconds * 10**6 + value.microseconds  # flake8: noqa
+
+            seconds = days * 86400 + value.seconds
+            if self.precision == self.SECONDS:
+                return seconds
+            # microseconds
+            return seconds * 10**6 + value.microseconds  # flake8: noqa
         except AttributeError:
             self.fail('format', input=value)
 
@@ -1045,8 +1044,7 @@ class Dict(Field):
     def _deserialize(self, value, attr, data):
         if isinstance(value, collections.Mapping):
             return value
-        else:
-            self.fail('invalid')
+        self.fail('invalid')
 
 
 class ValidatedField(Field):
@@ -1154,15 +1152,16 @@ class Method(Field):
         return missing_
 
     def _deserialize(self, value, attr, data):
-        if self.deserialize_method_name:
-            try:
-                method = utils.callable_or_raise(
-                    getattr(self.parent, self.deserialize_method_name, None)
-                )
-                return method(value)
-            except AttributeError:
-                pass
-        return value
+        if not self.deserialize_method_name:
+            return value
+
+        try:
+            method = utils.callable_or_raise(
+                getattr(self.parent, self.deserialize_method_name, None)
+            )
+            return method(value)
+        except AttributeError:
+            pass
 
 
 class Function(Field):
@@ -1215,8 +1214,8 @@ class Function(Field):
                 msg = 'No context available for Function field {0!r}'.format(attr)
                 raise ValidationError(msg)
             return func(value, self.parent.context)
-        else:
-            return func(value)
+
+        return func(value)
 
 
 
